@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.DS_Store
+# code knowledge graph: regenerate locally with GRAPHIFY_BACKEND=none graphify update .
+graphify-out/

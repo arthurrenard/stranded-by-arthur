@@ -1,0 +1,21 @@
+{
+  "name": "stranded-driftwood-isle",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A 3D survival game: shipwrecked on a forest island, survive until the search party spots you.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "node scripts/check.mjs",
+    "graph": "graphify update ."
+  },
+  "dependencies": {
+    "simplex-noise": "4.0.3",
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "vite": "8.3.6"
+  }
+}

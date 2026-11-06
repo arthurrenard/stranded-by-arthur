@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stranded — Driftwood Isle</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏝️</text></svg>" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="game"></div>
+
+    <!-- HUD root: owned by src/ui/hud.js -->
+    <div id="hud" class="hidden"></div>
+
+    <!-- Cinematic helpers: owned by main.js (ctx.fade / ctx.letterbox) -->
+    <div id="letterbox-top" class="letterbox-bar"></div>
+    <div id="letterbox-bottom" class="letterbox-bar"></div>
+    <div id="fade"></div>
+
+    <div id="loading" class="overlay">
+      <div class="overlay-card">
+        <div class="logo">STRANDED</div>
+        <div class="tag">Driftwood Isle</div>
+        <div id="loading-text" class="muted">Loading…</div>
+      </div>
+    </div>
+
+    <div id="title" class="overlay hidden">
+      <div class="overlay-card">
+        <div class="logo">STRANDED</div>
+        <div class="tag">Driftwood Isle</div>
+        <p class="story">
+          Your fishing boat went down in the night. You wash up on an unknown island, cold, soaked and alone.<br />
+          Stay alive until the search party spots you.
+        </p>
+        <div class="cta">Click to begin</div>
+        <div class="controls">
+          <span><b>WASD / ZQSD</b> move</span><span><b>Shift</b> sprint</span><span><b>Space</b> jump / swim up</span>
+          <span><b>E / Click</b> interact</span><span><b>R</b> secondary action</span><span><b>F / Right-click</b> use item</span>
+          <span><b>1-9 / Wheel</b> hotbar</span><span><b>Tab / C</b> craft</span><span><b>J</b> journal</span>
+          <span><b>M</b> map</span><span><b>T</b> torch</span><span><b>G</b> wave for help</span><span><b>N</b> mute</span>
+        </div>
+        <div class="muted small">Headphones recommended · intro can be skipped with Space</div>
+      </div>
+    </div>
+
+    <div id="pause" class="overlay hidden">
+      <div class="overlay-card">
+        <div class="logo small-logo">Paused</div>
+        <div class="cta">Click to resume</div>
+        <div class="options" data-stop>
+          <label>Mouse sensitivity <input id="opt-sens" type="range" min="0.3" max="2.5" step="0.05" value="1" /></label>
+          <label>Volume <input id="opt-vol" type="range" min="0" max="1" step="0.05" value="0.8" /></label>
+        </div>
+        <div class="controls">
+          <span><b>WASD / ZQSD</b> move</span><span><b>Shift</b> sprint</span><span><b>Space</b> jump / swim up</span>
+          <span><b>E / Click</b> interact</span><span><b>R</b> secondary action</span><span><b>F / Right-click</b> use item</span>
+          <span><b>1-9 / Wheel</b> hotbar</span><span><b>Tab / C</b> craft</span><span><b>J</b> journal</span>
+          <span><b>M</b> map</span><span><b>T</b> torch</span><span><b>G</b> wave for help</span><span><b>N</b> mute</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="debug-hud"></div>
+    <div id="debug-errors"></div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
