@@ -31,4 +31,5 @@
   check `docs/build-log/*.md`: a module with a build log is (mostly) done; modules still containing `// STUB` need building.
   Find leftover stubs with: `grep -l "// STUB" -r src`
 - Tooling: `npm run check` (syntax, imports, unit tests), CLAUDE.md (resume protocol), graphify code graph in graphify-out/.
-7. [ ] Publish: GitHub repo arthurrenard/stranded-by-arthur + GitHub Pages (Actions workflow .github/workflows/deploy.yml)
+7. [x] Publish (live + verified 2026-11-06): https://github.com/arthurrenard/stranded-by-arthur (public). Pages: https://arthurrenard.github.io/stranded-by-arthur/
+   It deploys through .github/workflows/deploy.yml on every push to main (npm ci, then check, then build, then deploy-pages). vite base is './'.
