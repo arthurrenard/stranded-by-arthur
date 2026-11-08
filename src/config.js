@@ -36,8 +36,9 @@ export const CONFIG = {
   stats: {
     start: { health: 88, thirst: 62, hunger: 72, energy: 75, heat: 30, wetness: 1, breath: 100 },
     // Drains per in-game hour
-    thirstPerHour: 4.0, // 100 -> 0 in ~25 game hours
-    hungerPerHour: 2.6, // 100 -> 0 in ~38 game hours
+    thirstPerHour: 4.0, // 100 -> 0 in ~25 game hours (x difficulty.thirstMul)
+    hungerPerHour: 4.2, // 100 -> 0 in ~24 game hours (x difficulty.hungerMul)
+    thirstZeroKills: true, // reaching 0 thirst is fatal (dehydration), on every difficulty
     // Energy (stamina) per real second
     energySprintPerSec: 6.5,
     energyJump: 4,
@@ -88,6 +89,105 @@ export const CONFIG = {
     spotThreshold: 100, // attention points needed to be spotted during a pass
   },
 
+  // Picked on the title screen (ctx.difficulty = { id, ...preset }). Every survival rate is multiplied by these.
+  difficulty: {
+    default: 'easy',
+    presets: {
+      easy: {
+        label: 'Easy',
+        blurb: 'A forgiving island. Build a simple driftwood raft.',
+        thirstMul: 1,
+        hungerMul: 1,
+        damageMul: 1, // health lost from bottomed-out needs, cold, heat, drowning, poison
+        regenMul: 1,
+        earlyDamageBelow: 0, // hard: health starts dropping when hunger/thirst fall below this
+        earlyDamagePerSec: 0,
+        nightChillPerDay: 1.5, // °C colder at night for each day survived (nights get worse)
+        plan: 'raft',
+      },
+      medium: {
+        label: 'Medium',
+        blurb: 'Thirst and wounds hit harder. Build an outrigger sailboat.',
+        thirstMul: 1.35,
+        hungerMul: 1.2,
+        damageMul: 1.7,
+        regenMul: 0.6,
+        earlyDamageBelow: 0,
+        earlyDamagePerSec: 0,
+        nightChillPerDay: 2.6,
+        plan: 'sailboat',
+      },
+      hard: {
+        label: 'Hard',
+        blurb: 'Hunger and thirst hurt long before they run out. Rebuild a motor launch.',
+        thirstMul: 1.6,
+        hungerMul: 1.4,
+        damageMul: 2.3,
+        regenMul: 0.35,
+        earlyDamageBelow: 30,
+        earlyDamagePerSec: 0.22, // at 0 (scales linearly from earlyDamageBelow down to 0)
+        nightChillPerDay: 3.6,
+        plan: 'motorboat',
+      },
+    },
+  },
+
+  // The main goal: rebuild a boat from parts scattered around the island and sail away.
+  // Stages are built in order at the build site on the spawn beach; each takes `hours` of game time.
+  // `needs` are item ids from src/core/items.js. Builder notes live in docs/build-log/B-raft.md.
+  raft: {
+    plans: {
+      raft: {
+        name: 'Driftwood Raft',
+        stages: [
+          { id: 'hull', label: 'Lash the hull together', needs: { wood: 10, rope: 2, hull_plank: 3 }, hours: 1.5 },
+          { id: 'mast', label: 'Raise the mast', needs: { mast_pole: 1, rope: 1 }, hours: 0.75 },
+          { id: 'sail', label: 'Rig the sail', needs: { cloth: 2, rope: 1 }, hours: 0.75 },
+          { id: 'supplies', label: 'Load water for the voyage', needs: { bottle_water: 1 }, hours: 0.25 },
+        ],
+      },
+      sailboat: {
+        name: 'Outrigger Sailboat',
+        stages: [
+          { id: 'hull', label: 'Build the hull', needs: { wood: 14, rope: 3, hull_plank: 5 }, hours: 2.5 },
+          { id: 'outrigger', label: 'Fit the outrigger float', needs: { bamboo: 4, wood: 4, rope: 2 }, hours: 1.5 },
+          { id: 'mast', label: 'Raise the mast', needs: { mast_pole: 1, rope: 2 }, hours: 1 },
+          { id: 'sail', label: 'Rig the sail', needs: { cloth: 3, rope: 1 }, hours: 1 },
+          { id: 'rudder', label: 'Mount the rudder', needs: { rudder: 1, rope: 1 }, hours: 0.75 },
+          { id: 'navigation', label: 'Fix the compass to the helm', needs: { compass: 1 }, hours: 0.25 },
+          { id: 'supplies', label: 'Load water for the voyage', needs: { bottle_water: 2 }, hours: 0.25 },
+        ],
+      },
+      motorboat: {
+        name: 'Motor Launch (the Marguerite’s tender)',
+        stages: [
+          { id: 'hull', label: 'Patch the hull', needs: { wood: 18, rope: 4, hull_plank: 7 }, hours: 3 },
+          { id: 'outrigger', label: 'Fit the outrigger float', needs: { bamboo: 4, wood: 4, rope: 2 }, hours: 1.5 },
+          { id: 'rudder', label: 'Mount the rudder', needs: { rudder: 1, rope: 1 }, hours: 1 },
+          { id: 'engine', label: 'Bolt on the outboard engine', needs: { engine_block: 1, propeller: 1, rope: 1 }, hours: 2 },
+          { id: 'ignition', label: 'Fit the spark plugs', needs: { spark_plug: 1 }, hours: 0.75 },
+          { id: 'fuel', label: 'Fill the tank', needs: { fuel_can: 1 }, hours: 0.25 },
+          { id: 'navigation', label: 'Fix the compass to the helm', needs: { compass: 1 }, hours: 0.25 },
+          { id: 'supplies', label: 'Load water for the voyage', needs: { bottle_water: 2 }, hours: 0.25 },
+        ],
+      },
+    },
+    // How many of each part exist in the world (spares included so the player isn't soft-locked),
+    // and how they're hidden: beach (lying on sand), buried (shovel), rock (wedged in rock: pickaxe),
+    // underwater (seabed near the wreck: dive with X).
+    parts: {
+      hull_plank: { where: 'beach', count: { raft: 5, sailboat: 7, motorboat: 9 } },
+      mast_pole: { where: 'beach', count: { raft: 1, sailboat: 1, motorboat: 0 } },
+      rudder: { where: 'buried', count: { raft: 0, sailboat: 1, motorboat: 1 } },
+      compass: { where: 'buried', count: { raft: 0, sailboat: 1, motorboat: 1 } },
+      fuel_can: { where: 'buried', count: { raft: 0, sailboat: 0, motorboat: 1 } },
+      spark_plug: { where: 'rock', count: { raft: 0, sailboat: 0, motorboat: 1 } },
+      engine_block: { where: 'underwater', count: { raft: 0, sailboat: 0, motorboat: 1 } },
+      propeller: { where: 'underwater', count: { raft: 0, sailboat: 0, motorboat: 1 } },
+    },
+    extraSailcloth: { raft: 1, sailboat: 2, motorboat: 0 }, // cloth bundles washed up on beaches (crate1 gives 2)
+  },
+
   keys: {
     forward: ['KeyW', 'ArrowUp'],
     back: ['KeyS', 'ArrowDown'],
@@ -103,6 +203,7 @@ export const CONFIG = {
     map: ['KeyM'],
     torch: ['KeyT'],
     wave: ['KeyG'],
+    dive: ['KeyX'], // hold to dive while swimming (Space rises)
     hotbar: ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'],
     mute: ['KeyN'],
   },

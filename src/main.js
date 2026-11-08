@@ -25,6 +25,7 @@ import * as Stats from './survival/stats.js';
 import * as Inventory from './gameplay/inventory.js';
 import * as Crafting from './gameplay/crafting.js';
 import * as Structures from './gameplay/structures.js';
+import * as Raft from './gameplay/raft.js';
 import * as Rescue from './story/rescue.js';
 import * as EasterEggs from './story/eastereggs.js';
 import * as Intro from './story/intro.js';
@@ -107,6 +108,17 @@ const ctx = {
 ctx.interact = createInteract(ctx);
 window.__game = ctx;
 
+/** Difficulty preset: { id, label, thirstMul, hungerMul, damageMul, regenMul, earlyDamageBelow, ..., plan }.
+ *  Default from ?difficulty=easy|medium|hard; the title screen can change it before 'game:start'. */
+function setDifficulty(id) {
+  const P = CONFIG.difficulty.presets;
+  const key = P[id] ? id : CONFIG.difficulty.default;
+  ctx.difficulty = { id: key, ...P[key] };
+  events.emit('difficulty:set', ctx.difficulty);
+  return ctx.difficulty;
+}
+setDifficulty(params.get('difficulty'));
+
 /** Fade the whole screen to black (1) or clear (0) over `seconds`. Returns a Promise. */
 ctx.fade = (to, seconds = 1) =>
   new Promise((res) => {
@@ -165,6 +177,7 @@ function boot() {
   add('inventory', Inventory);
   add('crafting', Crafting);
   add('structures', Structures);
+  add('raft', Raft);
   add('rescue', Rescue);
   add('eastereggs', EasterEggs);
   add('intro', Intro);
@@ -230,6 +243,12 @@ events.on('stats:died', (p) => {
   ctx.input.unlock();
   ctx.ui.showDeath?.({ cause: p?.cause || 'unknown', day: ctx.time.day, hour: ctx.time.hour });
 });
+events.on('raft:sailed', (p) => {
+  if (ctx.state !== 'playing') return;
+  ctx.state = 'rescued';
+  ctx.input.unlock();
+  ctx.ui.showWin?.({ day: ctx.time.day, hour: ctx.time.hour, method: 'raft', ...(p || {}) });
+});
 events.on('rescue:success', (p) => {
   if (ctx.state !== 'playing') return;
   ctx.state = 'rescued';
@@ -238,7 +257,13 @@ events.on('rescue:success', (p) => {
 });
 
 function wireOverlays() {
-  $('title').addEventListener('click', () => startGame(false));
+  for (const btn of document.querySelectorAll('[data-difficulty]')) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setDifficulty(btn.dataset.difficulty);
+      startGame(false);
+    });
+  }
   $('pause').addEventListener('click', () => {
     if (ctx.state !== 'paused') return;
     ctx.state = 'playing';
@@ -365,7 +390,11 @@ function installDebug() {
     weather: (opts) => ctx.weather.set?.(opts),
     rescuePass: (kind) => ctx.rescue.debugStartPass?.(kind),
     stats: () => (ctx.stats.values ? { ...ctx.stats.values } : null),
-    start: (skipIntro = true) => startGame(skipIntro),
+    start: (skipIntro = true, difficulty) => {
+      if (difficulty) setDifficulty(difficulty);
+      return startGame(skipIntro);
+    },
+    difficulty: (id) => (id ? setDifficulty(id) : ctx.difficulty),
     /**
      * Run the simulation for `seconds` of game-loop time synchronously at a fixed dt (default 1/60),
      * independent of requestAnimationFrame throttling (hidden tabs). Renders once at the end.

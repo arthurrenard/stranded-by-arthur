@@ -352,3 +352,46 @@ vectors), and no `new THREE.Material` per object.
 color management is on: set `texture.colorSpace = THREE.SRGBColorSpace` for color canvas textures; light intensities
 are physical (DirectionalLight ~2–4, Hemisphere ~0.5–1.5). Imports: `import * as THREE from 'three'` and
 `import { Sky } from 'three/examples/jsm/objects/Sky.js'` etc. `simplex-noise` v4: `import { createNoise2D, createNoise3D } from 'simplex-noise'`.
+
+---
+## 10. Update v2 (2026-11-07): difficulty, the boat-repair goal, diving, harsher survival
+New in core (orchestrator): `CONFIG.difficulty` presets (easy/medium/hard), `CONFIG.raft` (plans + part placement),
+`CONFIG.keys.dive` (X), new items in `src/core/items.js` (tools: shovel, pickaxe, diving_mask; parts: hull_plank, mast_pole,
+rudder, compass, fuel_can, spark_plug, engine_block, propeller; `PARTS` export), title-screen difficulty picker.
+
+**`ctx.difficulty`** = `{ id: 'easy'|'medium'|'hard', label, thirstMul, hungerMul, damageMul, regenMul, earlyDamageBelow,
+earlyDamagePerSec, nightChillPerDay, plan }`. It always exists (main sets a default before create), and the title screen may change
+it before `game:start` (event `difficulty:set`). **Read it lazily** (in update or on `game:start`), never cache it in create.
+
+**Win conditions:** `rescue:success` (search party) OR `raft:sailed` {plan, day} (boat rebuilt and launched). Main shows the win
+screen with `method: 'raft'` for the latter.
+
+### Ownership (v2)
+| builder | files | job |
+|---|---|---|
+| V2-A tweaks | src/nature/resources.js (+res/*), src/survival/model.js, src/survival/stats.js, tests/survival.test.mjs, src/audio/beds.js (+audio.js wind only) | pyrite 15% from stones, easier leaves, pick apples/chestnuts from the trees, difficulty rules + thirst-0 death + nights colder every day, diving-mask breath bonus, quieter/varying forest wind |
+| V2-B raft | src/gameplay/raft.js (+ src/gameplay/raft-*.js), tests/raft.test.mjs, docs/build-log/V2-B-raft.md | parts in the world (beach / buried / rock / underwater), dig/break/grab interactions, build site + staged visual boat, build time, launch cutscene, `raft:sailed` |
+| V2-C dive+UI | src/player/controller.js, src/gameplay/recipes.js (+crafting.js if needed), src/gameplay/inventory.js, src/ui/hud*.js + hud.css | dive controls, tool recipes, objective tracker, rescue attention meter + vehicle on compass, journal Boat tab, win text for 'raft' |
+
+### `ctx.raft` API (V2-B implements, V2-C displays)
+```js
+ctx.raft.plan            // CONFIG.raft.plans[ctx.difficulty.plan] (+ id)
+ctx.raft.stageIndex      // 0..stages.length (== length when complete)
+ctx.raft.complete        // all stages built
+ctx.raft.site            // THREE.Vector3 of the build site (spawn beach)
+ctx.raft.objective()     // { title, stageIndex, stageCount, stageLabel, needs: [{ id, have, need }], ready, complete, hint }
+ctx.raft.parts()         // [{ id, where: 'beach'|'buried'|'rock'|'underwater', found: bool, position: Vector3 }] (map/journal)
+ctx.raft.debugGiveAll(), ctx.raft.debugComplete()
+```
+Events: `raft:part` {id, where} (picked up), `raft:stage` {stageIndex, stage}, `raft:complete`, `raft:sailed` {plan, day}.
+Tools: digging a `buried` part needs `shovel` in the inventory, breaking a `rock` part needs `pickaxe`, and `underwater` parts lie on the
+seabed 3–8 m deep near the wreck. Grab them by diving (X) close enough; interact uses the camera position, so it works underwater.
+
+### Diving (V2-C, controller)
+While swimming, holding **X** dives (descend ~1.5 m/s, horizontal swim speed ×0.85). **Space** rises, and releasing both lets you float
+up gently. The breath meter drains while the head is under; with `diving_mask` in the inventory it drains ×0.5 (V2-A, stats).
+Expose `ctx.player.diving` (bool) and `ctx.player.depth` (m below the surface, eye). Energy drain while diving = swim rate.
+
+### Tool recipes (V2-C, recipes.js)
+Shovel: wood 2 + stone 1 + rope 1 · Flint Pickaxe: wood 2 + flint 1 + rope 1 (keeps 1 flint so fire still works only if the player
+has 2, so warn) · Diving Mask: bamboo 1 + cloth 1 + rope 1.

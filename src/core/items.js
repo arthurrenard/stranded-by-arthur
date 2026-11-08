@@ -168,7 +168,38 @@ export const ITEMS = {
     category: 'tool',
     desc: 'From the boat\'s emergency kit. Fire it (F) when the search party is near!',
   },
+  shovel: {
+    name: 'Wooden Shovel',
+    icon: '🪏',
+    category: 'tool',
+    desc: 'A flat blade lashed to a pole. Digs up things buried in the sand (look for disturbed mounds).',
+  },
+  pickaxe: {
+    name: 'Flint Pickaxe',
+    icon: '⛏️',
+    category: 'tool',
+    desc: 'A flint head lashed to a handle. Breaks open cracked rocks where something glints inside.',
+  },
+  diving_mask: {
+    name: 'Diving Mask',
+    icon: '🤿',
+    category: 'tool',
+    desc: 'A bamboo-framed mask sealed with sailcloth. Hold your breath much longer underwater (X to dive).',
+  },
+
+  // ── Boat parts (the main goal: rebuild a vessel at the build site on the spawn beach) ──
+  hull_plank: { name: 'Hull Plank', icon: '🟫', category: 'part', desc: 'A curved plank from the Marguerite\'s hull, washed up on a beach.' },
+  mast_pole: { name: 'Mast Pole', icon: '🎏', category: 'part', desc: 'A long, straight spar. Perfect for a mast.' },
+  rudder: { name: 'Rudder', icon: '🛞', category: 'part', desc: 'The Marguerite\'s rudder blade. It was buried by the tide.' },
+  compass: { name: 'Brass Compass', icon: '🧭', category: 'part', desc: 'Still points north. You will need it to steer home.' },
+  fuel_can: { name: 'Fuel Jerrycan', icon: '⛽', category: 'part', desc: 'A sealed can of petrol, half buried in the sand.' },
+  spark_plug: { name: 'Spark Plugs', icon: '🔌', category: 'part', desc: 'A tin of spare spark plugs, wedged into a rock crevice.' },
+  engine_block: { name: 'Outboard Engine', icon: '⚙️', category: 'part', desc: 'The tender\'s outboard motor. It sank next to the wreck.' },
+  propeller: { name: 'Propeller', icon: '🌀', category: 'part', desc: 'A bronze propeller, lost on the seabed by the reef.' },
 };
+
+/** Raft/boat part ids (category 'part'). */
+export const PARTS = Object.keys(ITEMS).filter((id) => ITEMS[id].category === 'part');
 
 /** Ids of raw foods that can be cooked at a fire. */
 export const COOKABLE = Object.keys(ITEMS).filter((id) => ITEMS[id].cooksInto);

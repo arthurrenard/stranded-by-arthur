@@ -179,3 +179,55 @@ body.debug #debug-hud,
 body.debug #debug-errors {
   display: block;
 }
+
+/* Title: difficulty picker */
+#title {
+  cursor: default;
+}
+.goal {
+  color: var(--accent);
+  margin-top: -4px;
+}
+.difficulty-pick {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: 18px 0 16px;
+}
+.diff {
+  font: inherit;
+  color: var(--ink);
+  width: 210px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.diff b {
+  font-size: 19px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.diff span {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink-dim);
+}
+.diff:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  background: rgba(242, 179, 91, 0.18);
+}
+.diff[data-difficulty='medium'] b {
+  color: #f2c25b;
+}
+.diff[data-difficulty='hard'] b {
+  color: #ff8a6b;
+}

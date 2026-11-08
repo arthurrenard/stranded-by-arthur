@@ -33,3 +33,12 @@
 - Tooling: `npm run check` (syntax, imports, unit tests), CLAUDE.md (resume protocol), graphify code graph in graphify-out/.
 7. [x] Publish (live + verified 2026-11-06): https://github.com/arthurrenard/stranded-by-arthur (public). Pages: https://arthurrenard.github.io/stranded-by-arthur/
    It deploys through .github/workflows/deploy.yml on every push to main (npm ci, then check, then build, then deploy-pages). vite base is './'.
+
+## v2 update (2026-11-07): requested by the user
+Requests: pyrite 15% from stones; easier leaves; apples from apple trees; faster hunger; difficulty picker (easy = old,
+medium = faster health + thirst loss, hard = health drops before needs hit 0); death at 0 health or thirst; nights colder
+every day; quieter, varying forest wind; MAIN GOAL = rebuild a boat from parts (beach / buried with shovel / in rock with
+pickaxe / underwater by diving), with more intricate plans per difficulty; plus chat answers (how to get spotted, a multiplayer plan).
+- [x] Core (orchestrator): CONFIG.difficulty + CONFIG.raft + keys.dive, new items, main difficulty + raft win, title picker, SPEC §10
+- [ ] V2 builders (3 agents): A tweaks, B raft, C dive+tools+HUD. See SPEC §10 ownership. Check: `grep -l "// STUB" -r src`
+- [ ] Integrate + playtest, then commit + push (Pages auto-deploys)
