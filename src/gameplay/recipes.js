@@ -4,6 +4,7 @@
 // tools: item ids that must be in the inventory but are NOT consumed (flint + pyrite for sparks)
 // place: structure type to build in front of the player (structures.place)
 // atFire: only craftable within 3 m of a lit fire
+// warnLast: { id, text }: after crafting, warn with `text` if none of item `id` is left (pickaxe → flint)
 import { ITEMS } from '../core/items.js';
 
 export const RECIPES = [
@@ -36,6 +37,48 @@ export const RECIPES = [
     desc: 'Burns for 4 hours: light, a little warmth, and a signal at night. T to light.',
     needs: [{ id: 'wood', n: 1 }, { any: [{ id: 'fiber', n: 1 }, { id: 'cloth', n: 1 }] }],
     gives: { id: 'torch', n: 1 },
+  },
+  // ── v2 tools (SPEC §10): dig up buried boat parts, break open rocks, dive longer ──
+  {
+    id: 'shovel',
+    name: 'Wooden Shovel',
+    icon: '🪏',
+    section: 'item',
+    desc: 'Digs up boat parts buried in the sand. Look for disturbed mounds and press E.',
+    needs: [
+      { id: 'wood', n: 2 },
+      { id: 'stone', n: 1 },
+      { id: 'rope', n: 1 },
+    ],
+    gives: { id: 'shovel', n: 1 },
+  },
+  {
+    id: 'pickaxe',
+    name: 'Flint Pickaxe',
+    icon: '⛏️',
+    section: 'item',
+    desc: 'Breaks open cracked rocks where something glints inside. Uses up one flint.',
+    needs: [
+      { id: 'wood', n: 2 },
+      { id: 'flint', n: 1 },
+      { id: 'rope', n: 1 },
+    ],
+    gives: { id: 'pickaxe', n: 1 },
+    // fire needs flint in the pack: warn when the craft used the last one
+    warnLast: { id: 'flint', text: "That was your last flint: you'll need another to make fire." },
+  },
+  {
+    id: 'diving_mask',
+    name: 'Diving Mask',
+    icon: '🤿',
+    section: 'item',
+    desc: 'Keep it in your pack to hold your breath much longer underwater (hold X to dive).',
+    needs: [
+      { id: 'bamboo', n: 1 },
+      { id: 'cloth', n: 1 },
+      { id: 'rope', n: 1 },
+    ],
+    gives: { id: 'diving_mask', n: 1 },
   },
   {
     id: 'campfire',
@@ -166,4 +209,11 @@ export function checkRecipe(recipe, count, env = {}) {
     if (p && !p.ok) reason = p.reason || "Can't build here.";
   }
   return { ok: !reason, reason, reqs, use };
+}
+
+/** Warning text after crafting `recipe` when it used up the last of an important item, else null. */
+export function lastUseWarning(recipe, count) {
+  const w = recipe?.warnLast;
+  if (!w || count(w.id) > 0) return null;
+  return w.text;
 }

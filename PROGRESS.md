@@ -40,5 +40,5 @@ medium = faster health + thirst loss, hard = health drops before needs hit 0); d
 every day; quieter, varying forest wind; MAIN GOAL = rebuild a boat from parts (beach / buried with shovel / in rock with
 pickaxe / underwater by diving), with more intricate plans per difficulty; plus chat answers (how to get spotted, a multiplayer plan).
 - [x] Core (orchestrator): CONFIG.difficulty + CONFIG.raft + keys.dive, new items, main difficulty + raft win, title picker, SPEC §10
-- [ ] V2 builders (3 agents): A tweaks, B raft, C dive+tools+HUD. See SPEC §10 ownership. Check: `grep -l "// STUB" -r src`
-- [ ] Integrate + playtest, then commit + push (Pages auto-deploys)
+- [x] V2 builders (3 agents, run wf_0679da67-c68, same-session resume only): A tweaks, B raft, C dive+tools+HUD. If interrupted, read docs/build-log/V2-*.md. See SPEC §10 ownership. Check: `grep -l "// STUB" -r src`
+- [x] Integrate + playtest (difficulty picker, raft plans, full Easy build + launch + win, shovel dig, apple picking, diving for the engine, thirst-0 death). Commit + push.

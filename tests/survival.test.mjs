@@ -27,20 +27,26 @@ const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg ?? ''}
 // Same weather fallbacks stats.js uses when ctx.weather is missing.
 const DEFAULT_WEATHER = { rain: 0, cloudiness: 0.25, wind: 0.35, airTempOffset: 0 };
 
-/** Simulate in-game time with the real clock. opts: { startHour, hours, state, weather, canopy, fire, sheltered, act, immersion } */
+const DIFF = (id) => ({ id, ...CONFIG.difficulty.presets[id] });
+
+/**
+ * Simulate in-game time with the real clock. opts: { startHour, hours, state, weather, canopy, fire, sheltered, act,
+ * immersion, diff (difficulty: adds its night chill), day (start on this day, default 1), feed (keep thirst/hunger full) }
+ */
 function simulate(opts) {
   const clock = createClock({ emit() {} });
+  if ((opts.day ?? 1) > 1) clock.skipHours((opts.day - 1) * 24);
   clock.setHour(opts.startHour ?? 12);
   const s = Object.assign(M.createState(), opts.state || {});
   const weather = { ...DEFAULT_WEATHER, ...(opts.weather || {}) };
   const dt = 0.05;
   const rep = {};
-  const trace = { minHeat: s.heat, reachComfortAt: null, damage: 0, causes: new Set() };
+  const trace = { minHeat: s.heat, minHealth: s.health, reachComfortAt: null, damage: 0, causes: new Set() };
   let hours = 0;
   while (hours < (opts.hours ?? 1)) {
     clock.update(dt);
     const env = {
-      airTemp: M.airTemperature(clock.hour, weather),
+      airTemp: M.airTemperature(clock.hour, weather) + (opts.diff ? M.shieldedChill(M.nightChill(clock.hoursTotal, opts.diff.nightChillPerDay), opts.fire ?? 0) : 0),
       sun: M.sunExposure(clock.daylight, opts.canopy ?? 0, weather.cloudiness, !!opts.sheltered),
       sunElevation: clock.sunDir.y,
       wind: weather.wind,
@@ -52,9 +58,11 @@ function simulate(opts) {
       immersion: opts.immersion ?? 0,
       waterTemp: M.waterTemperature('ocean'),
     };
-    M.tick(s, { dtReal: dt, dtSim: dt, dtHours: clock.dtHours, env, act: opts.act || {} }, S, rep);
+    M.tick(s, { dtReal: dt, dtSim: dt, dtHours: clock.dtHours, env, act: opts.act || {}, diff: opts.diff }, S, rep);
+    if (opts.feed) s.thirst = s.hunger = 100; // isolate the cold from the needs
     hours += clock.dtHours;
     trace.minHeat = Math.min(trace.minHeat, s.heat);
+    trace.minHealth = Math.min(trace.minHealth, s.health); // 0 = dead (the game would have ended there)
     if (trace.reachComfortAt === null && s.heat >= S.heatComfortMin) trace.reachComfortAt = hours;
     trace.damage += rep.damage;
     if (rep.cause) trace.causes.add(rep.cause);
@@ -63,14 +71,14 @@ function simulate(opts) {
 }
 
 /** Run tick for `seconds` of real time with a fixed env/act (no clock). */
-function run(s, seconds, { env = {}, act = {}, god = false, dt = 0.05 } = {}) {
+function run(s, seconds, { env = {}, act = {}, god = false, dt = 0.05, cfg = S, diff, breathMul } = {}) {
   const rep = {};
   const causes = new Set();
   let dmg = 0;
   const hoursPerSec = 24 / CONFIG.time.dayLengthSec;
   for (let t = 0; t < seconds - 1e-9; t += dt) {
     const e = { airTemp: 22, sun: 0.5, wind: 0.2, ...env };
-    M.tick(s, { dtReal: dt, dtSim: dt, dtHours: dt * hoursPerSec, env: e, act, god }, S, rep);
+    M.tick(s, { dtReal: dt, dtSim: dt, dtHours: dt * hoursPerSec, env: e, act, god, diff, breathMul }, cfg, rep);
     dmg += rep.damage;
     if (rep.cause) causes.add(rep.cause);
   }
@@ -128,10 +136,10 @@ test('rain soaks you in the open but not under a shelter', () => {
   assert.ok(open.s.heat < roof.s.heat, 'wet is colder');
 });
 
-test('thirst at 0 damages health (dehydration)', () => {
+test('thirst at 0 damages health (dehydration) when thirstZeroKills is off', () => {
   const s = Object.assign(M.createState(), { thirst: 0, heat: 55, wetness: 0 });
   const h0 = s.health;
-  const { causes } = run(s, 10);
+  const { causes } = run(s, 10, { cfg: { ...S, thirstZeroKills: false } });
   near(h0 - s.health, S.dmgThirstPerSec * 10, 0.05, 'dehydration damage');
   assert.ok(causes.has('dehydration'));
 });
@@ -275,6 +283,10 @@ test('sleeping with a fire/shelter is warmer than in the open; deficits never ki
   const r = M.simulateSleep(c, 10, {});
   assert.ok(r.damage > 0);
   assert.equal(c.health, M.K.sleepMinHealth);
+  assert.ok(c.thirst > 0, 'sleep never takes thirst to 0 (that would be death on waking)');
+  const d = Object.assign(M.createState(), { thirst: 20, hunger: 80 });
+  M.simulateSleep(d, 10, {});
+  near(d.thirst, M.K.sleepThirstFloor, 1e-9, 'thirst floor');
 });
 
 test('fall damage only above fallDamageSpeed and grows quickly', () => {
@@ -295,7 +307,7 @@ test('god mode: no drains and no damage', () => {
 });
 
 test('the biggest contributor names the death cause', () => {
-  const s = Object.assign(M.createState(), { thirst: 0, breath: 0, health: 5 });
+  const s = Object.assign(M.createState(), { hunger: 0, breath: 0, health: 5 });
   const { causes } = run(s, 1, { act: { headUnderwater: true, swimming: true } });
   assert.ok(causes.has('drowning'));
   assert.equal(s.health, 0);
@@ -310,10 +322,159 @@ test('health regenerates slowly when needs are met', () => {
 test('warning levels', () => {
   const s = Object.assign(M.createState(), { thirst: 8, hunger: 24, heat: 30 });
   assert.equal(M.warningLevel('thirst', s), 'critical');
+  assert.equal(M.warningLevel('thirst', { thirst: 18 }), 'low', 'thirst warns at 20');
+  assert.equal(M.warningLevel('thirst', { thirst: 22 }), null);
+  assert.equal(M.warningLevel('thirst', { thirst: 10 }), 'critical', 'and is critical at 10');
   assert.equal(M.warningLevel('hunger', s), 'low');
   assert.equal(M.warningLevel('cold', s), 'low');
   assert.equal(M.warningLevel('hot', s), null);
   assert.equal(M.warningLevel('energy', s, { sinking: true }), 'critical');
+});
+
+// ── v2: difficulty, fatal thirst, colder nights, diving mask ───────────────────────────────────────
+console.log('\nv2: difficulty + harsher survival');
+
+test('hunger drains at CONFIG.stats.hungerPerHour (4.2/h): ~24 game hours from full', () => {
+  near(S.hungerPerHour, 4.2, 1e-9);
+  const s = Object.assign(M.createState(), { hunger: 100, thirst: 100, heat: 55 });
+  M.needsStep(s, {}, 10, S);
+  near(s.hunger, 100 - 42, 1e-9);
+});
+
+test('thirst reaching 0 is fatal at once (cause dehydration); god mode is exempt', () => {
+  assert.equal(S.thirstZeroKills, true);
+  const s = Object.assign(M.createState(), { thirst: 0.001, heat: 55, wetness: 0, health: 100 });
+  const rep = {};
+  for (let i = 0; i < 40 && s.health > 0; i++) M.tick(s, { dtReal: 0.05, dtSim: 0.05, dtHours: 0.002, env: { airTemp: 22 }, act: {} }, S, rep);
+  assert.equal(s.health, 0);
+  assert.equal(rep.cause, 'dehydration');
+  const g = Object.assign(M.createState(), { thirst: 0, health: 50 });
+  run(g, 2, { god: true });
+  assert.equal(g.health, 50);
+});
+
+test('difficulty multiplies need drains (thirstMul / hungerMul)', () => {
+  for (const id of ['easy', 'medium', 'hard']) {
+    const D = DIFF(id);
+    const s = Object.assign(M.createState(), { thirst: 100, hunger: 100, heat: 55 });
+    M.needsStep(s, {}, 5, S, D);
+    near(100 - s.thirst, S.thirstPerHour * 5 * D.thirstMul, 1e-9, `${id} thirst`);
+    near(100 - s.hunger, S.hungerPerHour * 5 * D.hungerMul, 1e-9, `${id} hunger`);
+  }
+  assert.ok(DIFF('medium').thirstMul > 1 && DIFF('hard').thirstMul > DIFF('medium').thirstMul);
+});
+
+test('difficulty scales damage (starvation, drowning, poison) and regen', () => {
+  const hard = DIFF('hard');
+  const a = Object.assign(M.createState(), { hunger: 0, thirst: 80, heat: 55, wetness: 0 });
+  const b = Object.assign(M.createState(), { hunger: 0, thirst: 80, heat: 55, wetness: 0 });
+  run(a, 10);
+  run(b, 10, { diff: hard });
+  near(b.health, M.createState().health - (S.dmgHungerPerSec * hard.damageMul + hard.earlyDamagePerSec) * 10, 0.05, 'hard starvation');
+  assert.ok(b.health < a.health);
+  const w1 = Object.assign(M.createState(), { breath: 0 });
+  const w2 = Object.assign(M.createState(), { breath: 0 });
+  const r1 = run(w1, 1, { act: { headUnderwater: true, swimming: true } });
+  const r2 = run(w2, 1, { act: { headUnderwater: true, swimming: true }, diff: hard });
+  near(r2.dmg / r1.dmg, hard.damageMul, 0.05, 'drowning x damageMul');
+  const p1 = Object.assign(M.createState(), { heat: 55, wetness: 0 });
+  const p2 = Object.assign(M.createState(), { heat: 55, wetness: 0 });
+  M.applyEffects(p1, { poison: 10 });
+  M.applyEffects(p2, { poison: 10 });
+  const q1 = run(p1, 25);
+  const q2 = run(p2, 25, { diff: hard });
+  near(q2.dmg / q1.dmg, hard.damageMul, 0.05, 'poison x damageMul');
+  const h1 = Object.assign(M.createState(), { health: 50, thirst: 80, hunger: 80, heat: 55, wetness: 0 });
+  const h2 = Object.assign(M.createState(), { health: 50, thirst: 80, hunger: 80, heat: 55, wetness: 0 });
+  run(h1, 10, { env: { airTemp: 20, sun: 0.3 } });
+  run(h2, 10, { env: { airTemp: 20, sun: 0.3 }, diff: DIFF('medium') });
+  near((h2.health - 50) / (h1.health - 50), DIFF('medium').regenMul, 0.02, 'regen x regenMul');
+});
+
+test('hard: health drains before hunger / thirst run out (linear below earlyDamageBelow, each)', () => {
+  const hard = DIFF('hard');
+  assert.equal(M.earlyNeedDamage(hard.earlyDamageBelow + 1, hard), 0);
+  near(M.earlyNeedDamage(hard.earlyDamageBelow / 2, hard), hard.earlyDamagePerSec / 2, 1e-9);
+  near(M.earlyNeedDamage(0, hard), hard.earlyDamagePerSec, 1e-9);
+  assert.equal(M.earlyNeedDamage(5, DIFF('easy')), 0, 'easy: no early damage');
+  const s = Object.assign(M.createState(), { hunger: 15, thirst: 15, heat: 55, wetness: 0, health: 100 });
+  const { dmg, causes } = run(s, 10, { diff: hard });
+  assert.ok(dmg > 0 && (causes.has('starvation') || causes.has('dehydration')), `early damage ${dmg}`);
+  const e = Object.assign(M.createState(), { hunger: 15, thirst: 15, heat: 55, wetness: 0, health: 100 });
+  assert.equal(run(e, 10).dmg, 0, 'easy: no damage above 0');
+});
+
+test('night chill: 0 by day, full 02:00-05:00, grows each night, capped, continuous at midnight', () => {
+  assert.equal(M.nightFactor(13), 0);
+  assert.equal(M.nightFactor(3.5), 1);
+  assert.ok(M.nightFactor(22) > 0 && M.nightFactor(22) < 1);
+  assert.equal(M.nightChill(6.15, 3.6), 0, 'the first morning is not chilled');
+  near(M.nightChill(24 + 3.5, 1.5), -1.5, 1e-9, 'night 1 (02:00-05:00 of day 2)');
+  near(M.nightChill(48 + 3.5, 1.5), -3, 1e-9, 'night 2');
+  near(M.nightChill(30 * 24 + 3.5, 3.6), -M.K.nightChillMax, 1e-9, 'capped');
+  near(M.nightChill(24 - 1e-6, 2), M.nightChill(24 + 1e-6, 2), 1e-4, 'no jump at midnight');
+});
+
+/** One night in the open (18:00 -> 08:00), dry, from full health, needs kept full. */
+const openNight = (id, night, fire = 0) =>
+  simulate({ diff: DIFF(id), day: night, startHour: 18, hours: 14, fire, feed: true, state: { health: 100, heat: 50, wetness: 0 } });
+
+test('nights get worse: easy night 1 survivable, easy night 3 near-lethal, easy night 4 lethal', () => {
+  const n1 = openNight('easy', 1);
+  const n3 = openNight('easy', 3);
+  const n4 = openNight('easy', 4);
+  assert.ok(n1.trace.damage < 5, `easy night 1 damage ${n1.trace.damage.toFixed(1)}`);
+  assert.ok(n3.trace.damage >= 50 && n3.trace.minHealth > 0, `easy night 3 damage ${n3.trace.damage.toFixed(1)}`);
+  assert.ok(n3.trace.causes.has('hypothermia'));
+  assert.equal(n4.trace.minHealth, 0, 'easy night 4 in the open kills');
+});
+
+test('hard: night 1 hurts but is survivable, night 2 is lethal from full health; medium night 2 lethal', () => {
+  const h1 = openNight('hard', 1);
+  const h2 = openNight('hard', 2);
+  assert.ok(h1.trace.minHealth >= 25, `hard night 1 health ${h1.trace.minHealth.toFixed(1)}`);
+  assert.equal(h2.trace.minHealth, 0, 'hard night 2 in the open kills');
+  assert.equal(openNight('medium', 1).trace.minHealth, 100, 'medium night 1 is cold but harmless');
+  assert.equal(openNight('medium', 2).trace.minHealth, 0, 'medium night 2 in the open kills');
+});
+
+test('a lit campfire (fire 0.9) keeps every night survivable through day 5 on every difficulty', () => {
+  for (const id of ['easy', 'medium', 'hard']) {
+    for (let n = 1; n <= 5; n++) {
+      const r = openNight(id, n, 0.9);
+      assert.ok(r.trace.damage === 0 && r.trace.minHeat > M.K.coldDamageBelow, `${id} night ${n} by the fire: min heat ${r.trace.minHeat.toFixed(1)}`);
+    }
+  }
+  // a fire low on fuel (warmth 0.6) right beside you still gets you through the worst (capped) hard night
+  const low = openNight('hard', 5, 0.6);
+  assert.ok(low.trace.minHealth === 100 && low.trace.minHeat > M.K.coldDamageBelow, `hard night 5, low fire: min heat ${low.trace.minHeat.toFixed(1)}`);
+  // ...but sitting ~5 m off (fire ~0.3) on a late hard night does not
+  assert.equal(openNight('hard', 5, 0.3).trace.minHealth, 0, 'too far from the fire on hard night 5');
+});
+
+test('diving mask: breath drains half as fast', () => {
+  const a = M.createState();
+  const b = M.createState();
+  run(a, 4, { act: { headUnderwater: true, swimming: true } });
+  run(b, 4, { act: { headUnderwater: true, swimming: true }, breathMul: 0.5 });
+  near(100 - b.breath, (100 - a.breath) / 2, 1e-6);
+});
+
+test('sleep: difficulty drains + regen, and a late night in the open freezes the sleeper (never below sleepMinHealth)', () => {
+  const med = DIFF('medium');
+  const s = Object.assign(M.createState(), { thirst: 90, hunger: 90, health: 50 });
+  const r = M.simulateSleep(s, 8, { fire: 1, sheltered: true }, S, undefined, med);
+  near(r.thirstLost, S.thirstPerHour * 0.5 * 8 * med.thirstMul, 1e-9);
+  near(r.healed, 8 * M.K.sleepHealPerHour * med.regenMul, 1e-9);
+  const hard = DIFF('hard');
+  const cold = Object.assign(M.createState(), { thirst: 90, hunger: 90, health: 60 });
+  const rc = M.simulateSleep(cold, 8, { chill: -11 }, S, undefined, hard);
+  assert.ok(rc.froze && rc.damage > 0 && cold.health === M.K.sleepMinHealth, `froze, health ${cold.health}`);
+  const warm = Object.assign(M.createState(), { thirst: 90, hunger: 90, health: 60 });
+  const rw = M.simulateSleep(warm, 8, { chill: -11, fire: 1 }, S, undefined, hard);
+  assert.ok(!rw.froze && warm.health > 60, 'a fire keeps the cold off');
+  const mild = Object.assign(M.createState(), { thirst: 90, hunger: 90, health: 60 });
+  assert.ok(!M.simulateSleep(mild, 8, { chill: -1.2 }, S).froze, 'easy night 1 sleep is fine');
 });
 
 // ── Headless integration: controller.js + stats.js on the real heightfield (no DOM / WebGL) ────────────
@@ -485,6 +646,27 @@ async function integration() {
     assert.equal(ctx.state, 'dead');
     frames(150);
     assert.ok(ctx.camera.position.y < camY - 1, 'camera fell to the ground');
+  });
+  test('v2 stats: ctx.difficulty read lazily (drains), thirst 0 = death by dehydration', () => {
+    ctx.state = 'playing';
+    events.emit('game:start', {}); // stats reset
+    pl.teleport(spawn.x, spawn.z - 40, 0);
+    ctx.time.setHour(12);
+    const drain = (diff) => {
+      ctx.difficulty = diff;
+      st.setValues({ thirst: 80, hunger: 80, health: 100, heat: 55, wetness: 0 });
+      frames(240);
+      return 80 - st.values.thirst;
+    };
+    const easy = drain(undefined);
+    const med = drain(DIFF('medium'));
+    near(med / easy, DIFF('medium').thirstMul, 0.05, 'medium thirst drain ratio');
+    ctx.difficulty = undefined;
+    st.setValues({ thirst: 0.0005, health: 100 });
+    frames(10);
+    assert.equal(st.dead, true);
+    assert.equal(st.deathCause, 'dehydration');
+    assert.equal(count('stats:died'), 2);
   });
 }
 

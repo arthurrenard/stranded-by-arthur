@@ -1,5 +1,6 @@
 // Static text for the HUD: survival tips, plant notes, death causes, rescue methods.
 // Pure data + tiny formatting helpers (no DOM), so it can be unit-tested in node.
+import { ITEMS } from '../core/items.js';
 
 /** Journal "Survival tips" tab. */
 export const TIPS = [
@@ -15,6 +16,9 @@ export const TIPS = [
   { icon: '💨', title: 'Signal fire', text: 'A signal fire on open ground makes a smoke column visible for miles. Light it when you hear the search party, and add leaves for thicker smoke.' },
   { icon: '🆘', title: 'SOS', text: 'Ten stones laid out on a sandy beach spell SOS, which can be read from the air by day.' },
   { icon: '🧨', title: 'Flare', text: 'A flare is a huge, instant signal. Save it until a helicopter or boat is close, then fire it (F).' },
+  { icon: '⛵', title: 'Rebuild a boat', text: 'The surest way home: gather boat parts and materials, then build each stage at the Boatyard on the beach where you washed ashore (look at it and press E). Building takes game hours and only works by day. The Journal\'s Boat tab lists everything.' },
+  { icon: '🪏', title: 'Hidden parts', text: 'Some parts are buried under disturbed sand mounds (dig with a Wooden Shovel) or wedged in cracked, glinting rocks (break them with a Flint Pickaxe).' },
+  { icon: '🤿', title: 'Diving', text: 'While swimming, hold X to dive and Space to rise; let go to float up. Valuable parts lie on the seabed near the wreck. A Diving Mask makes your breath last twice as long.' },
   { icon: '🌿', title: 'Healing', text: 'Aloe, yarrow and chamomile restore health. Brew yarrow and chamomile with a full canteen at a fire to make a strong herbal tea.' },
 ];
 
@@ -68,7 +72,104 @@ export const RESCUE_METHOD = {
   waving: 'They saw you waving your arms from the open ground.',
   visible: 'They caught sight of you standing in the open.',
   player: 'They caught sight of you standing in the open.',
+  raft: 'You sailed home on your own boat!',
 };
+
+// ── v2: boat-repair goal (pure helpers for the objective tracker, journal Boat tab and compass) ──
+
+/** Where a boat part hides (ctx.raft.parts()[i].where) -> icon, label and where-to-look hint. */
+export const PART_WHERE = {
+  beach: { icon: '🏖️', label: 'On a beach', hint: 'Lying on the sand along the shore. Walk the beaches and press E.' },
+  buried: { icon: '🪏', label: 'Buried', hint: 'Under a disturbed sand mound. Dig it up with a Wooden Shovel (E).' },
+  rock: { icon: '⛏️', label: 'In a rock', hint: 'Wedged in a cracked rock with a glint inside. Break it with a Flint Pickaxe (E).' },
+  underwater: { icon: '🤿', label: 'Underwater', hint: 'On the seabed near the wreck, 3 to 8 m down. Hold X to dive; a Diving Mask helps.' },
+};
+
+/** Win-screen line for the 'raft' method. name = the boat's name (falls back to "boat"). */
+export function raftWinText(name) {
+  return `You sailed home on your own ${name || 'boat'}!`;
+}
+
+const int0 = (v) => (Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0);
+
+/**
+ * ctx.raft.objective() -> tracker view model, or null when there is nothing to show.
+ * { title, stage, needs: [{ id, icon, name, have, need, ok }], hint, ready, complete }
+ */
+export function objectiveView(o) {
+  if (!o || typeof o !== 'object') return null;
+  const count = int0(o.stageCount);
+  const idx = int0(o.stageIndex);
+  const complete = !!o.complete || (count > 0 && idx >= count);
+  const needs = [];
+  if (!complete && Array.isArray(o.needs)) {
+    for (const n of o.needs) {
+      if (!n || n.id == null) continue;
+      const it = ITEMS[n.id];
+      const have = int0(n.have),
+        need = int0(n.need);
+      needs.push({ id: n.id, icon: it?.icon ?? '❔', name: it?.name ?? String(n.id), have, need, ok: have >= need });
+    }
+  }
+  const label = typeof o.stageLabel === 'string' ? o.stageLabel : '';
+  const stage = complete ? 'Boat complete!' : count ? `Stage ${Math.min(idx + 1, count)}/${count}: ${label}`.replace(/: $/, '') : label;
+  // trust raft's own `ready` (it may add rules, e.g. daylight); fall back to the needs when it is missing
+  const ready = !complete && (typeof o.ready === 'boolean' ? o.ready : needs.length > 0 && needs.every((n) => n.ok));
+  return { title: o.title || 'Rebuild the boat', stage, needs, hint: typeof o.hint === 'string' ? o.hint : '', ready, complete };
+}
+
+/** Cheap change signature of an objectiveView (the tracker only touches the DOM when it changes). */
+export function objectiveSig(v) {
+  if (!v) return '';
+  let s = `${v.title}|${v.stage}|${v.hint}|${v.ready ? 1 : 0}${v.complete ? 1 : 0}`;
+  for (const n of v.needs) s += `|${n.id}:${n.have}/${n.need}`;
+  return s;
+}
+
+/**
+ * ctx.raft.parts() -> one row per part id (first-seen order):
+ * [{ id, icon, name, where, found, total, hint }]
+ */
+export function partsSummary(list) {
+  const rows = [];
+  const by = new Map();
+  if (!Array.isArray(list)) return rows;
+  for (const p of list) {
+    if (!p || p.id == null) continue;
+    let r = by.get(p.id);
+    if (!r) {
+      const it = ITEMS[p.id];
+      const w = PART_WHERE[p.where];
+      r = { id: p.id, icon: it?.icon ?? '❔', name: it?.name ?? String(p.id), where: p.where || 'beach', found: 0, total: 0, hint: w?.hint ?? '' };
+      by.set(p.id, r);
+      rows.push(r);
+    }
+    r.total++;
+    if (p.found) r.found++;
+  }
+  return rows;
+}
+
+/** Bearing of (dx, dz) relative to a heading (deg, 0 = N, clockwise), in -180..180 deg. */
+export function relBearing(headingDeg, dx, dz) {
+  const b = (Math.atan2(dx, -dz) * 180) / Math.PI;
+  let r = (b - headingDeg) % 360;
+  if (r > 180) r -= 360;
+  if (r < -180) r += 360;
+  return r;
+}
+
+/**
+ * Compass-strip placement for a marker: x in px within a strip of width w (PX_PER_DEG px per degree),
+ * clamped to the edges with an arrow when the target is outside the visible range.
+ * Returns { x, edge: -1 | 0 | 1 }.
+ */
+export function compassPlace(rel, w, pxPerDeg, margin = 22) {
+  const x = w / 2 + rel * pxPerDeg;
+  if (x < margin) return { x: margin, edge: -1 };
+  if (x > w - margin) return { x: w - margin, edge: 1 };
+  return { x, edge: 0 };
+}
 
 /** "1 day, 5 hours" / "7 hours 20 min". */
 export function fmtDuration(hours) {

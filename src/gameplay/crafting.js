@@ -1,7 +1,7 @@
 // Crafting (Builder E): recipe availability, requirement checks (materials, flint + pyrite tools,
 // "at a lit fire", placement validity) and crafting itself. The panel UI lives in src/ui/hud-panels.js
 // and calls available() / craft(id). Recipe data + pure checks: ./recipes.js.
-import { RECIPES, RECIPE_BY_ID, checkRecipe } from './recipes.js';
+import { RECIPES, RECIPE_BY_ID, checkRecipe, lastUseWarning } from './recipes.js';
 
 export function create(ctx) {
   const count = (id) => ctx.inventory?.count?.(id) ?? 0;
@@ -78,7 +78,11 @@ export function create(ctx) {
     if (ctx.stats_summary) ctx.stats_summary.itemsCrafted++;
     ctx.events.emit('craft:done', { recipe: r.id, name: r.name });
     ctx.audio?.play?.('craft');
-    if (!structure) toast(`Crafted ${r.name}.`, { icon: r.icon, kind: 'good', key: 'craft' });
+    if (!structure) {
+      const warn = lastUseWarning(r, count);
+      if (warn) toast(`Crafted ${r.name}. ${warn}`, { icon: r.icon, kind: 'warn', key: 'craft', duration: 6 });
+      else toast(`Crafted ${r.name}.`, { icon: r.icon, kind: 'good', key: 'craft' });
+    }
     return { ok: true, placed: !!structure, structure };
   }
 

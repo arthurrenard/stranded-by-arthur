@@ -1,7 +1,7 @@
 # 🏝️ STRANDED: Driftwood Isle
 
 Your fishing boat, the *Marguerite*, went down on a reef during a pre-dawn storm. You wake up on an unknown forest island, cold,
-soaked and alone. **Stay alive until a search party (a helicopter or a boat) sees you.**
+soaked and alone. **Rebuild a boat from the wreckage and sail home, or get spotted by the search party.**
 
 A first-person 3D survival game in the browser, built with Three.js. Everything is procedural: the island, trees, plants,
 animals, the boat, the helicopter, textures, and every sound effect. There are no asset files.
@@ -37,6 +37,7 @@ Open **http://localhost:5173** and click **Click to begin**. Headphones recommen
 | **W A S D** (or **Z Q S D** on AZERTY, arrows) | Move |
 | **Shift** | Sprint (costs energy) |
 | **Space** | Jump (costs energy) · swim up / keep your head above water |
+| **X** (hold, in water) | Dive (a diving mask lets you hold your breath twice as long) |
 | **E** / left click | Interact (pick up, drink, search, add wood, read…) |
 | **R** | Secondary action (cook, fill canteen…) |
 | **F** / right click | Use the selected item (eat, drink, fire the flare…) |
@@ -58,6 +59,25 @@ Open **http://localhost:5173** and click **Click to begin**. Headphones recommen
 4. **Eat plants, and cook them.** Cooked food is about 2–3× more nourishing. Some mushrooms are deadly, so learn which ones (journal).
 5. **Get seen.** Search passes start on the afternoon of day 1 and come closer each day. Stay in the open (beach or summit), hold **G**
    to wave, build a **signal fire** (huge smoke column) or an **SOS sign** on the sand, and save the flare for when they're close.
+
+## Difficulty and the main goal
+Pick a difficulty on the title screen. Each one builds a more intricate boat from more parts:
+
+| | Easy | Medium | Hard |
+|---|---|---|---|
+| Survival | the base rates | thirst ×1.35, health damage ×1.7, slower healing | thirst ×1.6, damage ×2.3; health drains when hunger or thirst drops below 30 |
+| Nights | 1.5 °C colder each day | 2.6 °C colder each day | 3.6 °C colder each day |
+| Boat | **Driftwood Raft**: 4 stages (hull, mast, sail, water) | **Outrigger Sailboat**: 7 stages, plus a buried rudder and compass | **Motor Launch**: 8 stages, plus an engine and propeller on the seabed, buried fuel, spark plugs inside a rock |
+
+On every difficulty, reaching **0 health or 0 thirst kills you**, and hunger drops faster than before.
+
+**How to rebuild the boat:**
+- Parts are spread around the island. **Hull planks** and the mast wash up on beaches all around the coast.
+- Some parts are **buried**: look for a sand mound marked with crossed sticks and dig with a **shovel** (wood 2 + stone 1 + rope 1).
+- Some are **wedged in cracked, glinting rocks**: break them with a **pickaxe** (wood 2 + flint 1 + rope 1).
+- Some lie **on the seabed by the wreck**: swim out and hold **X** to dive. Craft a **diving mask** (bamboo + cloth + rope) for longer breath.
+- Bring everything to the **Boatyard** sign on the starting beach. Each stage takes a few in-game hours to build, by daylight only.
+- When the boat is finished, launch it and sail home. The objective tracker (top-left) and **J → Boat** show what's missing and where to look.
 
 ## What's in the game
 

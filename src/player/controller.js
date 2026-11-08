@@ -1,5 +1,5 @@
 // First-person player controller: mouse look, walking / sprinting / jumping on the heightfield, colliders,
-// slope sliding, swimming (float, bob, sink when exhausted), fall damage, world-boundary currents, head bob,
+// slope sliding, swimming (float, bob, sink when exhausted), diving (hold X, v2), fall damage, world-boundary currents, head bob,
 // footsteps and the death fall. See SPEC.md §6 D.
 //
 // Conventions: position = FEET (world space). camera.rotation.order === 'YXZ'; yaw = rotation.y
@@ -30,6 +30,15 @@ const FLOAT_EYE = 0.25; // eyes this far above the water surface while swimming
 const SINK_EYE = -0.45; // eyes this far below the surface when too exhausted to swim
 const SWIM_EXIT_MARGIN = 0.12; // hysteresis on CONFIG.player.swimDepth
 const SINK_PADDLE_SPEED = 0.9; // weak paddling while sinking
+// Diving (v2, SPEC §10): hold CONFIG.keys.dive while swimming. Velocity targets, not the float spring,
+// so letting go at depth doesn't fling you up.
+const DIVE_SPEED = 1.5; // m/s down while X is held
+const DIVE_RISE = 2.0; // m/s up while Space is held underwater
+const DIVE_FLOAT = 0.8; // m/s gentle float back up when nothing is held
+const DIVE_RESPONSE = 3.5; // how fast vertical speed reaches its target
+const DIVE_HSPEED = 0.85; // horizontal swim speed factor while diving
+const DIVE_FLOOR = 0.35; // feet stay this far above the seabed
+const DIVE_HANDBACK = 0.3; // back to the float spring this close below the float level
 const BOUNDARY_SOFT = 32; // currents start this far inside CONFIG.world.boundary
 const CURRENT_ACCEL = 10;
 const FOV_SPRINT_KICK = 5; // degrees
@@ -73,6 +82,7 @@ export function create(ctx) {
   let fovApplied = false;
   let boundaryWarned = false;
   let swimHinted = false;
+  let wasSinking = false; // v2: exhausted-sinking last frame (gentle float-up after recovering at depth)
   let wasControlling = false;
   // death fall
   let deathInit = false;
@@ -89,6 +99,10 @@ export function create(ctx) {
     waterInfo: null,
     swimming: false,
     headUnderwater: false,
+    /** v2: in dive mode (holding X while swimming, or still floating back up from a dive). */
+    diving: false,
+    /** v2: eye depth below the water surface in m (0 when the eyes are above water or on land). */
+    depth: 0,
     sprinting: false,
     moving: false,
     sliding: false,
@@ -109,6 +123,9 @@ export function create(ctx) {
       position.y = Math.max(ctx.world.heightAt(position.x, position.z), top);
       velocity.set(0, 0, 0);
       api.onGround = true;
+      api.diving = false;
+      api.depth = 0;
+      wasSinking = false;
       onCollider = top > -Infinity && top >= position.y - 1e-6;
       coyote = 0;
       jumpBuffer = 0;
@@ -144,6 +161,7 @@ export function create(ctx) {
 
     update(dt) {
       if (ctx.state === 'dead') {
+        api.diving = false;
         deathFall(dt);
         return;
       }
@@ -216,6 +234,7 @@ export function create(ctx) {
       prevZ = position.z;
     const swimming = api.swimming;
     const sinking = swimming && statsProxy.exhausted && !flags.godMode;
+    const diveHeld = controllable && swimming && !sinking && input.isDown('dive');
     let fast = false;
 
     // 2) Horizontal velocity
@@ -223,6 +242,7 @@ export function create(ctx) {
     if (swimming) {
       fast = sprintHeld && canSprint && !sinking;
       speed = sinking ? SINK_PADDLE_SPEED : fast ? P.swimFastSpeed : P.swimSpeed;
+      if (diveHeld || api.diving) speed *= DIVE_HSPEED;
       accel = hasInput ? ACCEL_SWIM : DRAG_SWIM;
     } else {
       speed = flags.godMode && sprintHeld ? P.sprintSpeed : M.landSpeed(sprintHeld, statsProxy);
@@ -304,7 +324,7 @@ export function create(ctx) {
     else if (api.swimming && (!w || effDepth < P.swimDepth - SWIM_EXIT_MARGIN)) endSwim();
 
     // 7) Vertical
-    if (api.swimming) swimVertical(dt, controllable, sinking);
+    if (api.swimming) swimVertical(dt, controllable, sinking, diveHeld);
     else landVertical(dt, g, hStep, controllable);
 
     // 8) Flags, events, feel
@@ -312,6 +332,8 @@ export function create(ctx) {
     const moved = Math.hypot(position.x - prevX, position.z - prevZ);
     const hSpeed = dt > 0 ? moved / dt : 0;
     api.moving = hasInput && hSpeed > 0.4;
+    // a straight vertical dive costs the swim rate, not the treading rate (stats reads `moving`)
+    if (!api.moving && api.diving && Math.abs(velocity.y) > 0.4) api.moving = true;
     api.sprinting = api.moving && fast && (api.swimming || api.onGround || airTime < 0.4);
     api.sliding = sliding > 0.3;
     if (api.moving && moved < 2 && ctx.stats_summary) ctx.stats_summary.distanceWalked += moved;
@@ -395,6 +417,8 @@ export function create(ctx) {
 
   function endSwim() {
     api.swimming = false;
+    api.diving = false;
+    wasSinking = false;
     if (position.y < groundY) {
       stepSmooth -= groundY - position.y; // stand up smoothly
       position.y = groundY;
@@ -404,18 +428,30 @@ export function create(ctx) {
     ctx.events.emit('player:swimEnd', { type: lastWaterType });
   }
 
-  function swimVertical(dt, controllable, sinking) {
+  function swimVertical(dt, controllable, sinking, diveHeld) {
     const wind = ctx.weather?.wind?.strength ?? ctx.uniforms?.uWindStrength?.value ?? 0.35;
     const amp = lastWaterType === 'ocean' ? 0.05 + 0.09 * clamp(wind, 0, 1.2) : 0.018;
     const wave =
       (Math.sin(t * 1.3 + position.x * 0.21) * 0.6 + Math.sin(t * 0.83 + position.z * 0.17 + 1.7) * 0.4) * amp;
     const floatFeet = surfaceY - (P.eyeHeight - FLOAT_EYE) + wave;
+    // Dive mode: entered by holding X; left when exhausted (sinking takes over) or back near the float level.
+    // After an exhausted sink at depth, recovering energy floats you up gently instead of springing up.
+    if (sinking) api.diving = false;
+    else if (diveHeld || (wasSinking && position.y < floatFeet - DIVE_HANDBACK)) api.diving = true;
+    wasSinking = sinking;
+    if (api.diving) {
+      diveVertical(dt, controllable, diveHeld, floatFeet - wave);
+      coyote = 0;
+      airTime = 0;
+      return;
+    }
     let target = floatFeet;
     let k = 14,
       c = 5.5;
     if (sinking) {
-      target = surfaceY - P.eyeHeight + SINK_EYE + wave * 0.3;
-      k = 3; // a slow, heavy sink
+      // a slow, heavy sink; never lifts you from deeper down (e.g. exhausted mid-dive)
+      target = Math.min(surfaceY - P.eyeHeight + SINK_EYE + wave * 0.3, position.y);
+      k = 3;
       c = 3.2;
     } else if (controllable && ctx.input.isDown('jump')) target = floatFeet + 0.28; // kick up: head and shoulders out
     target = Math.max(target, groundY);
@@ -429,6 +465,24 @@ export function create(ctx) {
     airTime = 0;
   }
 
+  /** Underwater vertical motion: X descends, Space rises, neither floats you up; the seabed stops you. */
+  function diveVertical(dt, controllable, diveHeld, floatFeet) {
+    const rise = controllable && ctx.input.isDown('jump');
+    const tv = rise ? DIVE_RISE : diveHeld ? -DIVE_SPEED : DIVE_FLOAT;
+    velocity.y = damp(velocity.y, tv, DIVE_RESPONSE, dt);
+    position.y += velocity.y * dt;
+    const floorY = Math.max(groundY, Math.min(groundY + DIVE_FLOOR, floatFeet));
+    if (position.y < floorY) {
+      position.y = floorY;
+      if (velocity.y < 0) velocity.y = 0;
+    } else if (position.y > floatFeet) {
+      position.y = floatFeet; // X + Space together: hold at the surface
+      if (velocity.y > 0) velocity.y = 0;
+    }
+    // back near the surface and not diving: hand over to the float spring
+    if (!diveHeld && position.y >= floatFeet - DIVE_HANDBACK) api.diving = false;
+  }
+
   function updateWaterFlags() {
     const w = api.waterInfo;
     // in water: feet below the surface (hysteresis)
@@ -440,6 +494,7 @@ export function create(ctx) {
       ctx.events.emit(inNow ? 'player:enterWater' : 'player:exitWater', { type: lastWaterType });
     }
     const eyeY = position.y + P.eyeHeight + stepSmooth + dip;
+    api.depth = w ? Math.max(0, surfaceY - eyeY) : 0;
     const underNow = api.headUnderwater ? !!w && eyeY < surfaceY + 0.03 : !!w && eyeY < surfaceY - 0.08;
     if (underNow !== api.headUnderwater) {
       api.headUnderwater = underNow;

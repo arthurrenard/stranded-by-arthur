@@ -13,7 +13,14 @@ import { ITEMS, isConsumable } from '../core/items.js';
 import { effectSummary } from '../ui/hud-data.js';
 
 export const SLOTS = 9;
-export const isUsable = (id) => !!id && (isConsumable(id) || id === 'torch' || id === 'flare' || id === 'bottle_empty');
+/** v2: what F does (explains) for the boat-repair tools. Parts get a generic "bring it to the Boatyard". */
+export const TOOL_TEXT = {
+  shovel: 'Look for disturbed sand mounds and press E to dig.',
+  pickaxe: 'Look for cracked rocks with a glint inside and press E to break them open.',
+  diving_mask: 'Keep it in your pack: hold X while swimming to dive, and your breath lasts twice as long.',
+};
+// v2 tools count as usable so they get a hotbar slot (F explains them, see TOOL_TEXT)
+export const isUsable = (id) => !!id && (isConsumable(id) || id === 'torch' || id === 'flare' || id === 'bottle_empty' || id in TOOL_TEXT);
 
 export function create(ctx) {
   const counts = new Map();
@@ -286,6 +293,12 @@ export function create(ctx) {
       return false;
     }
     if (isConsumable(id)) return consume(id);
+    // v2 tools and boat parts: not used directly, so say what they are for
+    const how = TOOL_TEXT[id] || (it?.category === 'part' ? 'Bring it to the Boatyard on the beach where you washed ashore (Journal → Boat).' : null);
+    if (how) {
+      toast(`${it.name}: ${how}`, { icon: it.icon, key: 'mat', duration: 4.5 });
+      return false;
+    }
     toast(`${it.name} is a crafting material. Press Tab to craft.`, { icon: it.icon, key: 'mat', duration: 2.5 });
     return false;
   }

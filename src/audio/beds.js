@@ -209,6 +209,63 @@ export function createOcean(ac, dest, N) {
 
 // ── Wind ────────────────────────────────────────────────────────────────
 /** Gusty band-passed noise, a resonant howl for storms and leaf rustle that swells with the gusts. */
+const _clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+const _smooth = (e0, e1, x) => {
+  const t = _clamp01((x - e0) / (e1 - e0));
+  return t * t * (3 - 2 * t);
+};
+
+/**
+ * Slow random wind envelope (0..1): long quiet lulls (10-40 s at 15-25 %) that swell over 5-15 s to a peak
+ * (65-100 %), hold a few seconds, then fade back over 5-15 s. Pure (no WebAudio), stepped a few times a second.
+ */
+export class WindEnvelope {
+  constructor(rand = Math.random) {
+    this.rand = rand;
+    this.lo = 0.15 + 0.1 * rand();
+    this.hi = 0.8;
+    this.from = this.lo;
+    this.phase = 'lull';
+    this.t = 0;
+    this.dur = 3 + 12 * rand(); // the first lull is shorter
+    this.v = this.lo;
+  }
+  next() {
+    const r = this.rand;
+    this.t = 0;
+    if (this.phase === 'lull') {
+      this.phase = 'rise';
+      this.from = this.v;
+      this.hi = 0.65 + 0.35 * r();
+      this.dur = 5 + 10 * r();
+    } else if (this.phase === 'rise') {
+      this.phase = 'hold';
+      this.dur = 2 + 6 * r();
+    } else if (this.phase === 'hold') {
+      this.phase = 'fall';
+      this.from = this.v;
+      this.lo = 0.15 + 0.1 * r();
+      this.dur = 5 + 10 * r();
+    } else {
+      this.phase = 'lull';
+      this.dur = 10 + 30 * r();
+    }
+  }
+  /** Advance by dt seconds; returns the level 0..1. */
+  update(dt) {
+    this.t += dt;
+    if (this.t >= this.dur) this.next();
+    const k = _smooth(0, 1, this.t / this.dur);
+    if (this.phase === 'rise') this.v = this.from + (this.hi - this.from) * k;
+    else if (this.phase === 'fall') this.v = this.from + (this.lo - this.from) * k;
+    else if (this.phase === 'hold') this.v = this.hi;
+    else this.v = this.lo;
+    return this.v;
+  }
+}
+
+const WIND_STEP = 0.25; // s: the envelope and the mix targets update at 4 Hz (setTargetAtTime smooths in between)
+
 export function createWind(ac, dest, N) {
   const bed = new Bed(ac, dest);
   const bp = bq(ac, 'bandpass', 420, 0.8);
@@ -240,23 +297,50 @@ export function createWind(ac, dest, N) {
     rustle: new Target(lg.gain, 0, 0.8),
     rustleL: new Target(ll.g.gain, 0, 0.8),
   };
+  const env = new WindEnvelope();
+  let acc = WIND_STEP; // first call updates at once
+  let level = 0;
   return {
     bed,
-    /** w = { base, howl, rustle } (mix.windLevels), strength 0..1.5 */
-    update(t, dt, w, strength) {
+    /** Current slow envelope level (0..1), for debugging. */
+    get envelope() {
+      return level;
+    },
+    /**
+     * w = { base, howl, rustle } (mix.windLevels), strength 0..1.5.
+     * o = { canopy 0..1, storm 0..1, coast (m inland, + = inland), forest 0..1 } (optional): under a full canopy the wind
+     * drops to ~25 % (mix.windLevels already takes 45 % off), deep inland forest is quieter than the beach, and a slow
+     * random envelope makes it swell and lull. Storms override both (they stay loud).
+     */
+    update(t, dt, w, strength, o) {
+      acc += dt;
+      if (acc < WIND_STEP) return;
+      const step = acc;
+      acc = 0;
       const any = w.base + w.howl + w.rustle;
-      bed.setLevel(any > 0.002 ? 1 : 0, t, dt, 0.5);
+      bed.setLevel(any > 0.002 ? 1 : 0, t, step, 0.5);
+      const storm = _clamp01(o?.storm ?? 0);
+      const e = env.update(step);
+      level = e + (1 - e) * storm; // storms: always near the peak
       if (!bed.connected) return;
-      const b = w.base;
+      const calm = 1 - 0.7 * storm;
+      const canopy = _clamp01(o?.canopy ?? 0) * calm;
+      const shelter = 1 - 0.55 * canopy; // x windLevels' (1 - 0.45 canopy) = ~0.25 under a full canopy
+      const inland = _smooth(25, 110, o?.coast ?? 0) * _clamp01(o?.forest ?? 0) * calm;
+      const deep = 1 - 0.35 * inland; // the inland forest is calmer than the open beach
+      const k = level * shelter * deep;
+      const b = w.base * k;
       T.gust.set(0.6 * b, t);
       T.g0.set(0.22 * b, t);
       T.g1.set(0.15 * b, t);
       T.g2.set(0.18 * b, t);
-      T.freq.set(360 + 320 * Math.min(1.5, strength), t);
-      T.howl.set(0.16 * w.howl, t);
-      T.howlL.set(0.12 * w.howl, t);
-      T.rustle.set(0.22 * w.rustle, t);
-      T.rustleL.set(0.16 * w.rustle, t);
+      T.freq.set(360 + 320 * Math.min(1.5, strength) * (0.75 + 0.25 * level), t);
+      const hw = w.howl * k;
+      T.howl.set(0.16 * hw, t);
+      T.howlL.set(0.12 * hw, t);
+      const ru = w.rustle * (0.35 + 0.65 * level) * (1 - 0.4 * canopy) * deep; // leaves keep a soft rustle in a lull
+      T.rustle.set(0.22 * ru, t);
+      T.rustleL.set(0.16 * ru, t);
     },
   };
 }

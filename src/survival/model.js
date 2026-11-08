@@ -19,6 +19,14 @@ export const K = {
   airMaxHour: 14.5,
   cloudSwingDamp: 0.3, // overcast skies flatten the daily swing (cooler days, milder nights)
   rainChill: 4.5, // °C colder at rain = 1
+  // Nights get colder every day: offset = -difficulty.nightChillPerDay x nights survived x nightFactor(hour),
+  // capped. nightFactor ramps 0 -> 1 from 19:00 to 02:00, holds until 05:00, and is back to 0 by 08:00.
+  nightChillMax: 14,
+  nightRampStart: 19,
+  nightCoreStart: 2,
+  nightCoreEnd: 5,
+  nightRampEnd: 8,
+  fireChillShield: 0.5, // a fire's pocket of warm air cancels this share of the night chill at fire = 1 (a low fire still helps)
   waterTemp: { ocean: 19, lake: 16.5, river: 15 },
 
   // Heat target (body warmth points, 0..100). heat = refHeat + (airTemp - refTemp) * heatPerDegree + ...
@@ -73,6 +81,11 @@ export const K = {
 
   // Damage thresholds
   coldDamageBelow: 15,
+  // hypothermia rate = dmgColdPerSec x (coldCurveBase + coldCurveSlope x depth), depth = (15 - heat) / 15:
+  // a mild chill only nibbles, a deep freeze kills fast (x1 at heat 12, x3.25 at heat 5, x4.75 at heat 0). Tuned with
+  // the night simulations in tests/survival.test.mjs (easy night 3 near-lethal, hard night 2 lethal, hard night 1 not).
+  coldCurveBase: 0.25,
+  coldCurveSlope: 4.5,
   hotDamageAbove: 92,
   poisonSeconds: 20, // poison effect = total damage dealt over this many seconds
   nauseaMax: 60,
@@ -93,10 +106,12 @@ export const K = {
   sleepHeatOpen: 30,
   sleepHeatShelter: 12,
   sleepHeatFire: 30,
+  sleepThirstFloor: 5, // with CONFIG.stats.thirstZeroKills, sleep never takes thirst below this (you wake up parched)
+  sleepChillShelter: 0.5, // a roof keeps half of the night chill off a sleeper
 
   // Warning thresholds [low, critical]
   warn: {
-    thirst: [25, 10],
+    thirst: [20, 10], // thirst 0 is fatal (CONFIG.stats.thirstZeroKills)
     hunger: [25, 10],
     health: [30, 15],
     breath: [55, 25],
@@ -132,6 +147,14 @@ export function createState(cfg = CONFIG.stats) {
   };
 }
 
+// ── Difficulty ───────────────────────────────────────────────────────────────────────────────────
+const NO_DIFF = { id: 'easy', thirstMul: 1, hungerMul: 1, damageMul: 1, regenMul: 1, earlyDamageBelow: 0, earlyDamagePerSec: 0, nightChillPerDay: 0 };
+/** The difficulty in effect: ctx.difficulty, else CONFIG.difficulty.presets.easy. Read every field with ?? (partial objects ok). */
+export function difficultyOf(d) {
+  return d || CONFIG.difficulty?.presets?.easy || NO_DIFF;
+}
+const num1 = (v, f) => (typeof v === 'number' && Number.isFinite(v) ? v : f);
+
 // ── Environment ──────────────────────────────────────────────────────────────────────────────────
 
 /** Air temperature (°C) for an hour of day and weather { rain, cloudiness, airTempOffset }. */
@@ -150,6 +173,31 @@ export function airTemperature(hour, weather = {}) {
   // chills instead of adding them, so rain isn't counted twice.
   const chill = Math.min(weather.airTempOffset ?? 0, -rain * K.rainChill);
   return mid + amp * f * (1 - K.cloudSwingDamp * cloud) + chill;
+}
+
+/** 0 by day .. 1 in the dead of night (02:00-05:00), smooth ramps around it. hour 0..24. */
+export function nightFactor(hour) {
+  const x = (((hour + 12) % 24) + 24) % 24; // hours since noon: 19:00 = 7, 02:00 = 14, 05:00 = 17, 08:00 = 20
+  const up = smoothstep(K.nightRampStart - 12, K.nightCoreStart + 12, x);
+  const down = 1 - smoothstep(K.nightCoreEnd + 12, K.nightRampEnd + 12, x);
+  return up * down;
+}
+
+/**
+ * Extra night chill (°C, <= 0) at absolute game hour `hoursTotal`: nights get colder every day.
+ * The night that starts on the evening of day N counts N nights (same as `day - 1` at 02:00-05:00, but continuous
+ * through midnight). -min(K.nightChillMax, perDay x N) x nightFactor(hour).
+ */
+export function nightChill(hoursTotal, perDay = 0) {
+  const n = Math.max(0, Math.floor((hoursTotal + 12) / 24));
+  const hour = ((hoursTotal % 24) + 24) % 24;
+  const c = Math.min(K.nightChillMax, Math.max(0, perDay) * n);
+  return c > 0 ? -c * nightFactor(hour) : 0;
+}
+
+/** The night chill felt at a fire (0..1): the fire's warm pocket of air cancels part of it. */
+export function shieldedChill(chill, fire = 0) {
+  return chill * (1 - K.fireChillShield * clamp01(fire));
 }
 
 /** Water temperature (°C) by water type. */
@@ -272,10 +320,11 @@ export function fallDamage(impact, pcfg = CONFIG.player) {
 
 // ── Needs, damage, regen ─────────────────────────────────────────────────────────────────────────
 
-/** Drain thirst and hunger for dtHours. act: { sprinting, swimming, moving, sleeping } */
-export function needsStep(s, act, dtHours, cfg = CONFIG.stats) {
-  let tm = 1,
-    hm = 1;
+/** Drain thirst and hunger for dtHours. act: { sprinting, swimming, moving, sleeping }; diff: difficulty (mults). */
+export function needsStep(s, act, dtHours, cfg = CONFIG.stats, diff = null) {
+  const D = difficultyOf(diff);
+  let tm = num1(D.thirstMul, 1),
+    hm = num1(D.hungerMul, 1);
   if (s.heat > cfg.heatComfortMax) tm *= lerp(1, K.thirstHotMult, smoothstep(cfg.heatComfortMax, K.hotDamageAbove, s.heat));
   if (s.heat < cfg.heatComfortMin) hm *= lerp(1, K.hungerColdMult, smoothstep(cfg.heatComfortMin, K.coldDamageBelow, s.heat));
   if (act.sprinting || (act.swimming && act.moving)) {
@@ -290,35 +339,54 @@ export function needsStep(s, act, dtHours, cfg = CONFIG.stats) {
   s.hunger = Math.max(0, s.hunger - cfg.hungerPerHour * hm * dtHours);
 }
 
-/** Per-second damage rates from bottomed-out needs and extreme heat (time base: dtSim). Fills `out`. */
-export function needDamageRates(s, cfg = CONFIG.stats, out = {}) {
-  out.dehydration = s.thirst <= 0 ? cfg.dmgThirstPerSec : 0;
-  out.starvation = s.hunger <= 0 ? cfg.dmgHungerPerSec : 0;
-  out.hypothermia = s.heat < K.coldDamageBelow ? cfg.dmgColdPerSec * (1 + (K.coldDamageBelow - s.heat) / K.coldDamageBelow) : 0;
-  out.heatstroke = s.heat > K.hotDamageAbove ? cfg.dmgHotPerSec * (1 + (s.heat - K.hotDamageAbove) / (100 - K.hotDamageAbove)) : 0;
+/** Health lost per second (no damageMul) from a need below difficulty.earlyDamageBelow: 0 there .. earlyDamagePerSec at 0. */
+export function earlyNeedDamage(value, diff = null) {
+  const D = difficultyOf(diff);
+  const below = num1(D.earlyDamageBelow, 0);
+  if (!(below > 0) || value >= below) return 0;
+  return num1(D.earlyDamagePerSec, 0) * clamp01((below - value) / below);
+}
+
+/**
+ * Per-second damage rates from bottomed-out needs and extreme heat (time base: dtSim). Fills `out`.
+ * All x difficulty.damageMul; on hard (earlyDamageBelow > 0) low hunger / thirst hurt before they run out
+ * (that part is the preset's own per-second rate, not multiplied again).
+ */
+export function needDamageRates(s, cfg = CONFIG.stats, out = {}, diff = null) {
+  const D = difficultyOf(diff);
+  const m = num1(D.damageMul, 1);
+  out.dehydration = (s.thirst <= 0 ? cfg.dmgThirstPerSec * m : 0) + earlyNeedDamage(s.thirst, D);
+  out.starvation = (s.hunger <= 0 ? cfg.dmgHungerPerSec * m : 0) + earlyNeedDamage(s.hunger, D);
+  out.hypothermia = s.heat < K.coldDamageBelow ? cfg.dmgColdPerSec * m * (K.coldCurveBase + K.coldCurveSlope * (K.coldDamageBelow - s.heat) / K.coldDamageBelow) : 0;
+  out.heatstroke = s.heat > K.hotDamageAbove ? cfg.dmgHotPerSec * m * (1 + (s.heat - K.hotDamageAbove) / (100 - K.hotDamageAbove)) : 0;
   return out;
 }
 
-/** Health regen per second (dtSim) when fed, hydrated, comfortable and not poisoned. */
-export function healthRegenRate(s, env = {}, cfg = CONFIG.stats) {
+/** Health regen per second (dtSim) when fed, hydrated, comfortable and not poisoned (x difficulty.regenMul). */
+export function healthRegenRate(s, env = {}, cfg = CONFIG.stats, diff = null) {
   if (s.thirst < K.regenNeedMin || s.hunger < K.regenNeedMin) return 0;
   if (s.heat < cfg.heatComfortMin - K.regenHeatMargin || s.heat > cfg.heatComfortMax + K.regenHeatMargin) return 0;
   if (s.poison > 0 || s.breath < 100) return 0;
-  return cfg.healthRegenPerSec * ((env.fire ?? 0) > 0.3 || env.sheltered ? K.regenFireMult : 1);
+  return cfg.healthRegenPerSec * num1(difficultyOf(diff).regenMul, 1) * ((env.fire ?? 0) > 0.3 || env.sheltered ? K.regenFireMult : 1);
 }
 
 const _rates = {};
 /**
  * One simulation step. Mutates `s`, returns `report`:
  *   { damage (health lost this step), cause (biggest contributor or null), target (heat target), regen }
- * inp: { dtReal, dtSim, dtHours, env, act, god }
+ * inp: { dtReal, dtSim, dtHours, env, act, god, diff, breathMul }
+ *   diff: the difficulty (ctx.difficulty; default easy): need drain / damage / regen multipliers, early damage
+ *   breathMul: breath drain multiplier (0.5 with the diving mask)
  *   env: see heatTarget() + wetnessStep() (airTemp, sun, sunElevation, wind, rain, canopy, fire, sheltered,
  *        torch, immersion, waterTemp)
  *   act: { moving, sprinting, swimming, sinking, headUnderwater }
  * Health damage is applied here (not in god mode); the caller turns it into events / death.
+ * With cfg.thirstZeroKills, thirst reaching 0 is fatal at once (cause 'dehydration').
  */
 export function tick(s, inp, cfg = CONFIG.stats, report = {}) {
   const { dtReal = 0, dtSim = dtReal, dtHours = 0, env = {}, act = {}, god = false } = inp;
+  const D = difficultyOf(inp.diff);
+  const dmgMul = num1(D.damageMul, 1);
 
   // Wetness first (it feeds the heat target), then heat.
   s.wetness = wetnessStep(s.wetness, env, dtHours, dtReal);
@@ -327,7 +395,7 @@ export function tick(s, inp, cfg = CONFIG.stats, report = {}) {
   s.heat = approachHeat(s.heat, target, dtSim, env.immersion ?? 0, cfg);
 
   if (!god) {
-    needsStep(s, act, dtHours, cfg);
+    needsStep(s, act, dtHours, cfg, D);
     changeEnergy(s, energyRate(s, act, cfg) * dtReal, cfg);
   } else {
     // god mode: no drains (regen still applies, so stamina never runs out)
@@ -335,7 +403,7 @@ export function tick(s, inp, cfg = CONFIG.stats, report = {}) {
   }
 
   // Breath
-  if (act.headUnderwater && !god) s.breath = Math.max(0, s.breath - cfg.breathDrainPerSec * dtReal);
+  if (act.headUnderwater && !god) s.breath = Math.max(0, s.breath - cfg.breathDrainPerSec * num1(inp.breathMul, 1) * dtReal);
   else s.breath = Math.min(100, s.breath + cfg.breathRegenPerSec * dtReal);
 
   // Nausea: queasy seconds + a little thirst
@@ -350,7 +418,7 @@ export function tick(s, inp, cfg = CONFIG.stats, report = {}) {
     cause = null,
     best = 0;
   if (!god) {
-    needDamageRates(s, cfg, _rates);
+    needDamageRates(s, cfg, _rates, D);
     for (const c in _rates) {
       const a = _rates[c] * dtSim;
       if (a > 0) {
@@ -362,7 +430,7 @@ export function tick(s, inp, cfg = CONFIG.stats, report = {}) {
       }
     }
     if (s.breath <= 0) {
-      const a = cfg.dmgDrownPerSec * dtReal;
+      const a = cfg.dmgDrownPerSec * dmgMul * dtReal;
       dmg += a;
       if (a > best) {
         best = a;
@@ -386,18 +454,23 @@ export function tick(s, inp, cfg = CONFIG.stats, report = {}) {
       s.poisonTime = 0;
     }
     if (!god) {
-      dmg += a;
-      if (a > best) {
-        best = a;
+      dmg += a * dmgMul;
+      if (a * dmgMul > best) {
+        best = a * dmgMul;
         cause = 'poison';
       }
     }
+  }
+  // Dehydration is fatal: thirst at 0 (also after nausea) ends it, whatever else is going on.
+  if (!god && cfg.thirstZeroKills && s.thirst <= 0 && s.health > 0) {
+    dmg = Math.max(dmg, s.health);
+    cause = 'dehydration';
   }
 
   let regen = 0;
   if (dmg > 0) s.health = Math.max(0, s.health - dmg);
   else {
-    regen = healthRegenRate(s, env, cfg) * dtSim;
+    regen = healthRegenRate(s, env, cfg, D) * dtSim;
     s.health = Math.min(100, s.health + regen);
   }
 
@@ -465,35 +538,47 @@ export function applyEffects(s, effects = {}, cfg = CONFIG.stats) {
 // ── Sleep ────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Sleep `hours` in one go. env: { fire (0..1), sheltered, rain }.
- * Thirst / hunger drain at 50 % rate; energy restored to 100; heat set by fire / shelter; clothes dry by a
- * fire or under a roof; poison and nausea wear off; health heals while needs last, deficits hurt at half
- * the waking rate but never below K.sleepMinHealth. Returns a summary.
+ * Sleep `hours` in one go. env: { fire (0..1), sheltered, rain, chill (average night chill °C over the sleep, <= 0) }.
+ * Thirst / hunger drain at 50 % rate (x difficulty mults); energy restored to 100; heat set by fire / shelter and the
+ * night chill; clothes dry by a fire or under a roof; poison and nausea wear off; health heals (x regenMul) while
+ * needs last; deficits and freezing hurt at half the waking rate (x damageMul) but never below K.sleepMinHealth.
+ * With cfg.thirstZeroKills, sleep never takes thirst below K.sleepThirstFloor. Returns a summary.
  */
-export function simulateSleep(s, hours, env = {}, cfg = CONFIG.stats, secPerHour = CONFIG.time.dayLengthSec / 24) {
+export function simulateSleep(s, hours, env = {}, cfg = CONFIG.stats, secPerHour = CONFIG.time.dayLengthSec / 24, diff = null) {
+  const D = difficultyOf(diff);
+  const dmgMul = num1(D.damageMul, 1);
   hours = Math.max(0, hours);
-  const tRate = cfg.thirstPerHour * K.sleepDrainMult;
-  const hRate = cfg.hungerPerHour * K.sleepDrainMult;
-  const tLeft = tRate > 0 ? s.thirst / tRate : Infinity; // hours until thirst hits 0
-  const hLeft = hRate > 0 ? s.hunger / hRate : Infinity;
+  const tRate = cfg.thirstPerHour * K.sleepDrainMult * num1(D.thirstMul, 1);
+  const hRate = cfg.hungerPerHour * K.sleepDrainMult * num1(D.hungerMul, 1);
   const thirstBefore = s.thirst,
     hungerBefore = s.hunger,
     healthBefore = s.health;
-  s.thirst = Math.max(0, s.thirst - tRate * hours);
+  const tFloor = cfg.thirstZeroKills ? Math.min(thirstBefore, K.sleepThirstFloor) : 0;
+  const tLeft = tRate > 0 ? Math.max(0, s.thirst - tFloor) / tRate : Infinity; // hours until thirst bottoms out
+  const hLeft = hRate > 0 ? s.hunger / hRate : Infinity;
+  s.thirst = Math.max(tFloor, s.thirst - tRate * hours);
   s.hunger = Math.max(0, s.hunger - hRate * hours);
-  const dryHours = Math.max(0, hours - tLeft);
+  const dryHours = cfg.thirstZeroKills ? 0 : Math.max(0, hours - tLeft);
   const starveHours = Math.max(0, hours - hLeft);
-  const deficit = (dryHours * cfg.dmgThirstPerSec + starveHours * cfg.dmgHungerPerSec) * secPerHour * K.sleepDeficitDamageMult;
-  const healHours = Math.min(hours, tLeft, hLeft);
-  const heal = s.poison > 0 ? 0 : healHours * K.sleepHealPerHour;
+
+  const fire = clamp01(env.fire ?? 0);
+  const chill = Math.min(0, num1(env.chill, 0));
+  const exposure = (1 - fire) * (env.sheltered ? K.sleepChillShelter : 1);
+  const heat = K.sleepHeatOpen + (env.sheltered ? K.sleepHeatShelter : 0) + fire * K.sleepHeatFire + chill * K.heatPerDegree * exposure;
+  const freeze = heat < K.coldDamageBelow ? clamp((K.coldDamageBelow - heat) / K.coldDamageBelow, 0, 1.5) : 0;
+
+  const deficit =
+    (dryHours * cfg.dmgThirstPerSec + starveHours * cfg.dmgHungerPerSec + hours * freeze * cfg.dmgColdPerSec) *
+    secPerHour * K.sleepDeficitDamageMult * dmgMul;
+  const healHours = freeze > 0 ? 0 : Math.min(hours, tLeft, hLeft);
+  const heal = s.poison > 0 ? 0 : healHours * K.sleepHealPerHour * num1(D.regenMul, 1);
   let health = s.health + heal - deficit;
   if (deficit > 0) health = Math.max(Math.min(healthBefore, K.sleepMinHealth), health);
   s.health = clamp(health, 0, 100);
 
   s.energy = 100;
   s.exhausted = false;
-  const fire = clamp01(env.fire ?? 0);
-  s.heat = clamp(K.sleepHeatOpen + (env.sheltered ? K.sleepHeatShelter : 0) + fire * K.sleepHeatFire, 20, 66);
+  s.heat = clamp(heat, freeze > 0 ? 8 : 20, 66);
   const rain = clamp01(env.rain ?? 0);
   if (rain > 0.05 && !env.sheltered) s.wetness = Math.max(s.wetness, rain);
   else if (fire > 0.2 || env.sheltered) s.wetness = 0;
@@ -509,6 +594,7 @@ export function simulateSleep(s, hours, env = {}, cfg = CONFIG.stats, secPerHour
     healed: Math.max(0, s.health - healthBefore),
     damage: deficit,
     heat: s.heat,
+    froze: freeze > 0,
   };
 }
 

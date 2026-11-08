@@ -1,9 +1,9 @@
-// HUD panels (Builder E): crafting + backpack, journal (tips / plants / secrets / log), island map.
+// HUD panels (Builder E): crafting + backpack, journal (boat / tips / plants / secrets / log), island map.
 // Built into the .hud-panels container by hud.js. Rendering is on demand (open, tab switch, after a
 // craft or item use), never per frame, because the game is frozen while a panel is open.
 import { ITEMS, isConsumable } from '../core/items.js';
 import { fmtHour } from '../core/util.js';
-import { TIPS, PLANTS, SAFETY_BADGE, effectSummary, compassLabel, MAP_LANDMARKS, STRUCTURE_ICON } from './hud-data.js';
+import { TIPS, PLANTS, SAFETY_BADGE, effectSummary, compassLabel, MAP_LANDMARKS, STRUCTURE_ICON, PART_WHERE, partsSummary } from './hud-data.js';
 
 function el(tag, cls, parent, text) {
   const e = document.createElement(tag);
@@ -30,7 +30,7 @@ export function createPanels(ctx, ui, host, map) {
     seenItems: new Set(),
   };
   let current = null;
-  let journalTab = 'tips';
+  let journalTab = 'boat'; // v2: the boat is the main goal, so the journal opens on it
   let mapCanvas = null;
 
   const panel = el('div', 'panel', host);
@@ -161,6 +161,7 @@ export function createPanels(ctx, ui, host, map) {
     el('div', 'panel-sub', titleBox, `Day ${ctx.time.day} · ${fmtHour(ctx.time.hour)}`);
     const tabs = el('div', 'panel-tabs', panel);
     const T = [
+      ['boat', '⛵ Boat'],
       ['tips', '🧭 Survival tips'],
       ['plants', `🌿 Plants ${journal.plants.size}/${PLANTS.length}`],
       ['secrets', `✨ Secrets ${journal.eggs.size}/${journal.eggsTotal}`],
@@ -174,7 +175,9 @@ export function createPanels(ctx, ui, host, map) {
       });
     }
     const body = el('div', 'panel-body', panel);
-    if (journalTab === 'tips') {
+    if (journalTab === 'boat') {
+      renderBoat(body);
+    } else if (journalTab === 'tips') {
       const g = el('div', 'tip-grid', body);
       for (const t of TIPS) {
         const d = el('div', 'tip', g);
@@ -240,6 +243,74 @@ export function createPanels(ctx, ui, host, map) {
     }
   }
 
+  // ── Journal: Boat tab (v2, SPEC §10: ctx.raft owned by V2-B) ───────────
+  const HOW_TO = [
+    ['🪏', 'Buried parts', 'Craft a Wooden Shovel (wood 2, stone 1, rope 1), then press E on a disturbed sand mound to dig.'],
+    ['⛏️', 'Parts in rocks', 'Craft a Flint Pickaxe (wood 2, flint 1, rope 1), then press E on a cracked rock that glints. Keep a spare flint for fire!'],
+    ['🤿', 'Underwater parts', 'Swim out near the wreck and hold X to dive (Space rises, let go to float up). A Diving Mask (bamboo 1, cloth 1, rope 1) means a longer breath.'],
+    ['🔨', 'Building', 'Bring everything to the Boatyard and press E there. You can only build by day, and each stage takes a few hours of work.'],
+  ];
+
+  function renderBoat(body) {
+    const R = ctx.raft;
+    const plan = R?.plan;
+    const stages = Array.isArray(plan?.stages) ? plan.stages : null;
+    if (!stages) {
+      el('div', 'muted-note', body, 'No boat plans yet. Look around the beach where you washed ashore.');
+    } else {
+      const n = stages.length;
+      const idx = Math.max(0, Math.min(n, Number.isFinite(R.stageIndex) ? R.stageIndex : 0));
+      const done = !!R.complete || idx >= n;
+      const pr = el('div', 'progress', body);
+      el('div', '', pr).style.width = (100 * (done ? n : idx)) / Math.max(1, n) + '%';
+      el('div', 'sec-title', body, `${plan.name || 'Your boat'} · ${done ? n : idx}/${n} stages built`);
+      if (done) el('div', 'muted-note', body, '⛵ The boat is finished. Launch it from the Boatyard!');
+      const count = (id) => ctx.inventory?.count?.(id) ?? 0;
+      for (let i = 0; i < n; i++) {
+        const st = stages[i] || {};
+        const state = i < idx || done ? 'done' : i === idx ? 'current' : 'todo';
+        const row = el('div', 'boat-stage ' + state, body);
+        el('span', 'bs-mark', row, state === 'done' ? '✓' : state === 'current' ? '▶' : String(i + 1));
+        const mid = el('div', '', row);
+        el('div', 'bs-name', mid, st.label || st.id || `Stage ${i + 1}`);
+        const req = el('div', 'req', mid);
+        for (const id in st.needs || {}) {
+          const need = st.needs[id];
+          const it = ITEMS[id];
+          const have = state === 'done' ? need : Math.min(count(id), need);
+          const ok = have >= need;
+          const c = el('span', 'req-chip ' + (ok ? 'have' : 'miss'), req, `${it?.icon || '❔'} ${have}/${need}`);
+          c.title = it?.name || id;
+        }
+        if (Number.isFinite(st.hours)) el('span', 'bs-hours', row, `${st.hours} h`);
+      }
+    }
+
+    const rows = partsSummary(R?.parts?.());
+    el('div', 'sec-title', body, 'Boat parts');
+    if (!rows.length) el('div', 'muted-note', body, stages ? 'This boat needs no salvaged parts beyond materials.' : 'Nothing found yet.');
+    for (const r of rows) {
+      const all = r.found >= r.total;
+      const row = el('div', 'plant' + (r.found ? '' : ' unknown'), body);
+      el('div', 'p-icon', row, r.icon);
+      const mid = el('div', '', row);
+      el('div', 'p-name', mid, r.name);
+      const w = PART_WHERE[r.where];
+      el('div', 'p-desc', mid, w ? `${w.icon} ${w.label}. ${w.hint}` : r.hint);
+      el('span', 'badge' + (all ? ' safe' : ''), row, `${all ? '✅ ' : ''}${r.found}/${r.total} found`);
+    }
+
+    el('div', 'sec-title', body, 'How to');
+    const g = el('div', 'tip-grid', body);
+    for (const [icon, title, text] of HOW_TO) {
+      const d = el('div', 'tip', g);
+      el('div', 'tip-icon', d, icon);
+      const tx = el('div', '', d);
+      el('b', '', tx, title);
+      tx.append(text);
+    }
+  }
+
   // ── Map ────────────────────────────────────────────────────────────────
   function renderMap(titleBox) {
     el('div', 'panel-title', titleBox, 'Island map');
@@ -277,6 +348,15 @@ export function createPanels(ctx, ui, host, map) {
       pin.style.left = px + '%';
       pin.style.top = pz + '%';
     }
+    // v2: the Boatyard (always shown: it is on the beach where you washed ashore)
+    const yard = ctx.raft?.site;
+    if (yard) {
+      const [px, pz] = pct(yard.x, yard.z);
+      const pin = el('div', 'map-pin yard', stage, '⛵');
+      pin.style.left = px + '%';
+      pin.style.top = pz + '%';
+      pin.title = 'Boatyard';
+    }
     const p = ctx.player?.position;
     if (p) {
       const [px, pz] = pct(p.x, p.z);
@@ -288,6 +368,11 @@ export function createPanels(ctx, ui, host, map) {
     }
 
     el('div', 'sec-title', legend, 'Places');
+    if (yard) {
+      const row = el('div', 'lg', legend);
+      el('span', '', row, '⛵');
+      el('span', '', row, `Boatyard${ctx.raft?.plan?.name ? ': ' + ctx.raft.plan.name : ''}`);
+    }
     for (const L of MAP_LANDMARKS) {
       const known = discovered.has(L.key);
       const row = el('div', 'lg' + (known ? '' : ' unknown'), legend);

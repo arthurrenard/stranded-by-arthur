@@ -17,12 +17,15 @@
 //
 // Public API (ctx.resources): { spawnItem(id, x, z, n?), nearest(kindOrItem, x?, z?), counts(),
 //   kinds, regrowAll(), init(), update(dt) }
+// v2: stones hide pyrite (15 %), berry bushes / nettles also give leaves, many more leafy shrubs near the spawn, and
+//   the trees themselves can be harvested (apples, chestnuts, palm shake, birch / willow leaves: res/treeHarvest.js).
 import * as THREE from 'three';
 import { ITEMS } from '../core/items.js';
 import { clamp01, smoothstep, lerp } from '../core/util.js';
 import * as M from './res/meshes.js';
 import { createResourceMaterials, makeDotTexture } from './res/materials.js';
 import { Placer, F, waterEdgePoints, riverBankPoints } from './res/placement.js';
+import { createTreeHarvest } from './res/treeHarvest.js';
 
 const TAU = Math.PI * 2;
 const GRID = 24; // instance grid cell (m)
@@ -36,6 +39,8 @@ const easeOut = (t) => 1 - (1 - t) * (1 - t);
  *  regrow:   [min,max] game hours until it is back
  *  view:     render distance (m); Infinity = global (written once)
  *  iy:       interaction point height above the ground (visual center)
+ *  extra:    [[item, n], ...] always given on top of a harvest (v2: leaves from berry bushes / nettles)
+ *  bonus:    { item, chance, msg } a lucky extra (v2: pyrite in 15 % of stones)
  *  align:    tilt to the ground normal (things lying on the ground)
  *  space:    spacing radius (m) for placement
  *  scale:    [min,max] uniform scale; squash: per-axis random variation
@@ -43,10 +48,10 @@ const easeOut = (t) => 1 - (1 - t) * (1 - t);
  */
 const KINDS = {
   stick: { item: 'wood', n: [1, 2], label: 'Pick up Sticks', regrow: [24, 48], view: 85, iy: 0.1, align: true, space: 0.9, scale: [0.8, 1.25], burst: 0x8a6a4a, parts: [['stick', 'solid', 'respawn']] },
-  stone: { item: 'stone', n: [1, 1], label: 'Pick up Stone', regrow: [24, 48], view: 75, iy: 0.1, align: true, space: 0.7, scale: [0.8, 1.45], squash: 0.18, burst: 0x9a948a, parts: [['stone', 'solid', 'respawn']] },
+  stone: { item: 'stone', n: [1, 1], bonus: { item: 'pyrite', chance: 0.15, msg: '…and a brassy glint: Pyrite!' }, label: 'Pick up Stone', regrow: [24, 48], view: 75, iy: 0.1, align: true, space: 0.7, scale: [0.8, 1.45], squash: 0.18, burst: 0x9a948a, parts: [['stone', 'solid', 'respawn']] },
   flint: { item: 'flint', n: [1, 1], label: 'Pick up Flint', regrow: [60, 84], view: 75, iy: 0.1, align: true, space: 1.2, scale: [1.1, 1.3], burst: 0x6a7c96, parts: [['flint', 'mineral', 'respawn']] },
   pyrite: { item: 'pyrite', n: [1, 1], label: 'Pick up Pyrite', regrow: [60, 84], view: 85, iy: 0.12, align: true, space: 1.2, scale: [1.05, 1.3], burst: 0xe2c45a, parts: [['pyrite', 'mineral', 'respawn']] },
-  berry: { item: 'berries', n: [2, 3], label: 'Harvest Blackberries', plant: true, regrow: [24, 48], view: 130, iy: 0.55, space: 1.7, scale: [0.85, 1.3], burst: 0x3a1d4a, parts: [['berryBush.bush', 'solid', 'static', true], ['berryBush.berries', 'glossy', 'growth']] },
+  berry: { item: 'berries', n: [2, 3], extra: [['leaves', 2]], label: 'Harvest Blackberries', plant: true, regrow: [24, 48], view: 130, iy: 0.55, space: 1.7, scale: [0.85, 1.3], burst: 0x3a1d4a, parts: [['berryBush.bush', 'solid', 'static', true], ['berryBush.berries', 'glossy', 'growth']] },
   apple: { item: 'wild_apple', n: [1, 2], label: 'Pick up Wild Apples', plant: true, regrow: [24, 48], view: 70, iy: 0.08, align: true, space: 0.8, scale: [1.1, 1.35], burst: 0xa6bf3c, parts: [['applePile', 'glossy', 'respawn']] },
   chestnut: { item: 'chestnut', n: [2, 3], label: 'Gather Chestnuts', plant: true, regrow: [24, 48], view: 70, iy: 0.08, align: true, space: 0.8, scale: [1.1, 1.35], burst: 0x8a6a3a, parts: [['chestnutPile', 'glossy', 'respawn']] },
   coconut: { item: 'coconut', n: [1, 1], label: 'Pick up Coconut', plant: true, regrow: [24, 48], view: 95, iy: 0.14, align: true, space: 1.0, scale: [0.95, 1.1], burst: 0x86603a, parts: [['coconutPile', 'solid', 'respawn']] },
@@ -54,7 +59,7 @@ const KINDS = {
   toadstool: { item: 'toadstool', n: [1, 1], label: null, plant: true, regrow: [24, 48], view: 75, iy: 0.12, align: true, space: 0.9, scale: [1.0, 1.3], burst: 0xdc3a24, parts: [['toadstool', 'solid', 'growth']] },
   yam: { item: 'wild_root', n: [1, 2], label: 'Dig up Wild Yam', plant: true, regrow: [24, 48], view: 80, iy: 0.3, space: 1.2, scale: [0.95, 1.25], burst: 0x6f9e40, parts: [['yam', 'foliage', 'sprout']] },
   cattail: { item: 'cattail', n: [1, 2], label: 'Pull up Cattail Roots', plant: true, regrow: [24, 48], view: 100, iy: 0.7, space: 1.0, scale: [0.85, 1.15], burst: 0x93ad52, parts: [['cattail', 'foliage', 'sprout']] },
-  nettle: { item: 'nettle', n: [2, 2], label: 'Pick Nettles (they sting!)', plant: true, regrow: [24, 48], view: 85, iy: 0.4, space: 1.1, scale: [0.9, 1.25], burst: 0x4f7d34, parts: [['nettle', 'foliage', 'sprout']] },
+  nettle: { item: 'nettle', n: [2, 2], extra: [['leaves', 2]], label: 'Pick Nettles (they sting!)', plant: true, regrow: [24, 48], view: 85, iy: 0.4, space: 1.1, scale: [0.9, 1.25], burst: 0x4f7d34, parts: [['nettle', 'foliage', 'sprout']] },
   grass: { item: 'fiber', n: [2, 2], label: 'Cut Tall Grass', plant: true, regrow: [24, 40], view: 95, iy: 0.5, space: 1.0, scale: [0.8, 1.2], burst: 0xc9c274, parts: [['tallGrass', 'foliage', 'sprout']] },
   shrub: { item: 'leaves', n: [3, 3], label: 'Gather Leaves', plant: true, regrow: [24, 40], view: 130, iy: 0.55, space: 1.5, scale: [0.85, 1.3], burst: 0x6fae45, parts: [['shrub.twigs', 'solid', 'static'], ['shrub.foliage', 'solid', 'sprout', true]] },
   bamboo: { item: 'bamboo', n: [1, 1], label: 'Cut Bamboo', requires: 'flint', requiresMsg: 'You need something sharp, like flint', plant: true, regrow: [24, 48], view: Infinity, iy: 1.35, radius: 3.2, space: 0.7, scale: [0.85, 1.15], burst: 0x8fbc50, parts: [['bamboo.stump', 'solid', 'static'], ['bamboo.stalk', 'foliage', 'shoot', true]] },
@@ -153,6 +158,8 @@ export function create(ctx) {
   const rr = (a, b) => a + (b - a) * rand();
   const now = () => ctx.time?.hoursTotal ?? 0;
   const playerPos = () => ctx.player?.position ?? ctx.camera.position;
+  const extraTrees = []; // trees we plant ourselves (fallback palm): harvestable like flora's
+  let treeHarvest = null; // created in init (needs burst / itemName)
 
   function geometry(key) {
     if (geoCache[key]) return geoCache[key];
@@ -452,13 +459,31 @@ export function create(ctx) {
     audioPos.set(inst.x, inst.y + 0.3, inst.z);
     ctx.audio?.play?.('pickup', { position: audioPos });
     if (k.plant && ctx.stats_summary) ctx.stats_summary.plantsGathered = (ctx.stats_summary.plantsGathered || 0) + 1;
-    ctx.ui?.toast?.(`+${added} ${itemName(k.item)}`, { icon: ITEMS[k.item]?.icon, kind: 'good', duration: 2 });
+    let text = `+${added} ${itemName(k.item)}`;
+    const gifts = [];
+    if (k.extra) {
+      for (const [id, en] of k.extra) {
+        const er = ctx.inventory?.add?.(id, en);
+        const got = typeof er === 'number' ? er : en;
+        if (got > 0) (text += `, +${got} ${itemName(id)}`), gifts.push([id, got]);
+      }
+    }
+    ctx.ui?.toast?.(text, { icon: ITEMS[k.item]?.icon, kind: 'good', duration: 2 });
+    if (k.bonus && rand() < k.bonus.chance) {
+      const br = ctx.inventory?.add?.(k.bonus.item, 1);
+      if ((typeof br === 'number' ? br : 1) > 0) {
+        ctx.ui?.toast?.(k.bonus.msg, { icon: ITEMS[k.bonus.item]?.icon, kind: 'good', duration: 3 });
+        burst(inst.x, inst.y + 0.15, inst.z, 0xe2c45a, 10);
+        gifts.push([k.bonus.item, 1]);
+      }
+    }
     burst(inst.x, inst.y + k.iy * 0.8, inst.z, k.burst ?? 0x88aa55, k.key === 'bamboo' ? 22 : 14);
     if (k.key === 'nettle') {
       ctx.ui?.flash?.('rgba(255,150,90,0.22)', 0.35);
       ctx.ui?.toast?.('Ouch! The nettles sting your fingers.', { icon: '🌿', kind: 'warn', duration: 2.5 });
     }
     ctx.events.emit('harvest', { id: k.item, n: added, kind: k.key });
+    for (const [id, got] of gifts) ctx.events.emit('harvest', { id, n: got, kind: k.key });
   }
 
   // ── Particle bursts (pooled Points) ────────────────────────────────────
@@ -709,6 +734,12 @@ export function create(ctx) {
     // 6. Beach decor ─────────────────────────────────────────────────────────────────────────
     put('log', placer.scatter(rand, 26, sp('log'), F.beach));
     put('shell', placer.scatter(rand, 340, sp('shell'), F.waterline, 340 * 60));
+
+    // 7. v2: leafy shrubs everywhere, especially within ~150 m of the spawn (leaves for shelters, beds and smoke).
+    // Placed last so every earlier placement keeps its seeded spot; kept off the open sand (raft build site).
+    const leafy = (x, z, b) => b.sand < 0.3 && b.slope < 0.35 && b.rock < 0.35 && (b.forest > 0.1 || b.meadow > 0.25);
+    put('shrub', placer.around(rand, S.x, S.z, 16, 150, 30, sp('shrub'), leafy));
+    put('shrub', placer.scatter(rand, 70, sp('shrub'), (x, z, b) => b.forest > 0.2 && b.slope < 0.4 && b.sand < 0.25 && b.rock < 0.3));
   }
 
   function shuffle(a) {
@@ -736,6 +767,7 @@ export function create(ctx) {
     addInstance('palm', p, { scale: 1, yaw: rand() * TAU, dy: -0.05 });
     ctx.colliders?.add?.({ x: p.x, z: p.z, r: 0.22, y0: p.y - 1, y1: p.y + 6, tag: 'tree', data: { kind: 'palm', owner: 'resources' } });
     placer.trees.insert({ x: p.x, z: p.z, r: 0, trunkR: 0.25, tree: { x: p.x, z: p.z, type: 'palm' } });
+    extraTrees.push({ x: p.x, z: p.z, y: p.y, type: 'palm', height: 6, trunkR: 0.22, crownR: 2.4, alive: true });
     coconutsUnder(placer, { x: p.x, z: p.z, trunkR: 0.25 }, 2);
   }
 
@@ -846,6 +878,15 @@ export function create(ctx) {
       }
       for (const inst of k.instances) registerInteract(inst);
     }
+    // v2: harvest from the trees themselves (apples, chestnuts, palm shake, birch / willow leaves)
+    try {
+      treeHarvest = createTreeHarvest(ctx, { rand, now, burst: (x, y, z, c, n) => burst(x, y, z, c, n), itemName });
+      const trees = Array.isArray(ctx.flora?.trees) ? ctx.flora.trees : [];
+      for (const t of trees) treeHarvest.add(t);
+      for (const t of extraTrees) treeHarvest.add(t);
+    } catch (e) {
+      console.error('[resources] tree harvests failed', e);
+    }
     // particle bursts
     const bg = new THREE_.BufferGeometry();
     bg.setAttribute('position', new THREE_.BufferAttribute(bPos, 3).setUsage(THREE_.DynamicDrawUsage));
@@ -924,6 +965,7 @@ export function create(ctx) {
   function counts() {
     const out = {};
     for (const key in kinds) out[key] = kinds[key].instances.length;
+    out.treeHarvests = treeHarvest?.count ?? 0;
     return out;
   }
   /** Nearest ready instance of a kind key or item id (for debug: __game.resources.nearest('flint')). */
@@ -945,6 +987,7 @@ export function create(ctx) {
   }
   function regrowAll() {
     for (const inst of [...regrowing]) restore(inst);
+    treeHarvest?.regrowAll();
     dirty = true;
   }
 
@@ -961,6 +1004,10 @@ export function create(ctx) {
     },
     get drops() {
       return drops;
+    },
+    /** v2: harvestable trees ({ tree, def, readyAt, x, y, z, handle }). */
+    get treeHarvests() {
+      return treeHarvest?.entries ?? [];
     },
     init,
     update,

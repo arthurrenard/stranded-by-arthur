@@ -10,7 +10,7 @@ import './hud.css';
 import { CONFIG } from '../config.js';
 import { ITEMS } from '../core/items.js';
 import { clamp, clamp01, fmtHour, angleDiff } from '../core/util.js';
-import { DEATH, RESCUE_METHOD, fmtDuration, heatWord, compassLabel, STRUCTURE_ICON } from './hud-data.js';
+import { DEATH, RESCUE_METHOD, fmtDuration, heatWord, compassLabel, STRUCTURE_ICON, objectiveView, objectiveSig, raftWinText, relBearing, compassPlace } from './hud-data.js';
 import { createPanels } from './hud-panels.js';
 import { createMap } from './hud-map.js';
 
@@ -90,6 +90,10 @@ export function create(ctx) {
   const vigCache = { health: -1, cold: -1, hot: -1, poison: -1, water: -1 };
   const barCache = {};
   const chipCache = {};
+  // v2: objective tracker, rescue banner, compass specials
+  let objAcc = 1, objSig = null;
+  let rescueKind = null, rescuePct = -1, rescueTipKey = '';
+  let diveHintArmed = false;
 
   if (hasDom) build();
 
@@ -132,6 +136,9 @@ export function create(ctx) {
     }
     E.cmpMarkers = [];
     for (let i = 0; i < 6; i++) E.cmpMarkers.push(el('div', 'cmp-marker', cmp));
+    E.cmpYard = el('div', 'cmp-marker cmp-yard', cmp, '⛵');
+    E.cmpYard.title = 'Boatyard';
+    E.cmpRescue = el('div', 'cmp-marker cmp-rescue', cmp, '🚁');
     el('div', 'cmp-needle', cmp);
     E.cmpDeg = el('div', 'cmp-deg', game);
 
@@ -141,8 +148,26 @@ export function create(ctx) {
     const clkText = el('div', '', clk);
     E.clkDay = el('div', 'clk-day', clkText, 'Day 1');
     E.clkTime = el('div', 'clk-time', clkText, '06:00');
+    E.clkDiff = el('div', 'clk-diff', clkText, '');
     E.clkWeather = el('span', 'clk-weather', clk, '');
     E.journalBadge = el('div', 'hud-journal-badge', game, '📖 New journal entry · press J');
+
+    // v2: boat objective tracker (top-left)
+    E.obj = el('div', 'hud-obj hud-glass', game);
+    const oh = el('div', 'obj-head', E.obj);
+    el('span', 'obj-icon', oh, '⛵');
+    E.objTitle = el('span', 'obj-title', oh, '');
+    E.objStage = el('div', 'obj-stage', E.obj);
+    E.objNeeds = el('div', 'obj-needs', E.obj);
+    E.objHint = el('div', 'obj-hint', E.obj);
+    E.objReady = el('div', 'obj-ready', E.obj, '🔨 Ready to build at the Boatyard!');
+
+    // v2: search-party banner (top-centre, under the compass)
+    E.rescue = el('div', 'hud-rescue hud-glass', game);
+    E.rescueTitle = el('div', 'rs-title', E.rescue, '');
+    const rsb = el('div', 'rs-bar', E.rescue);
+    E.rescueFill = el('div', 'rs-fill', rsb);
+    E.rescueTip = el('div', 'rs-tip', E.rescue, '');
 
     // stats
     const st = el('div', 'hud-stats hud-glass', game);
@@ -175,6 +200,7 @@ export function create(ctx) {
     E.breath = el('div', 'hud-breath', st);
     E.bubbles = [];
     for (let i = 0; i < 10; i++) E.bubbles.push(el('span', '', E.breath, '🫧'));
+    E.depth = el('span', 'hud-depth', E.breath, '');
     E.breath.style.display = 'none';
     E.chips = el('div', 'hud-chips', st);
     E.chipEls = {};
@@ -416,11 +442,14 @@ export function create(ctx) {
   function showWin(info = {}) {
     if (!root) return console.log('[win]', info);
     const card = endScreen('won');
-    el('div', 'screen-icon', card, info.kind === 'boat' ? '🚤' : '🚁');
-    el('div', 'screen-title', card, 'RESCUED!');
+    const sailed = info.method === 'raft';
+    el('div', 'screen-icon', card, sailed ? '⛵' : info.kind === 'boat' ? '🚤' : '🚁');
+    el('div', 'screen-title', card, sailed ? 'HOMEWARD BOUND!' : 'RESCUED!');
     const day = info.day ?? ctx.time.day;
     const hour = info.hour ?? ctx.time.hour;
-    const how = RESCUE_METHOD[info.method] || (info.method ? `They spotted you (${info.method}).` : 'They spotted you.');
+    const how = sailed
+      ? raftWinText(raftName(info))
+      : RESCUE_METHOD[info.method] || (info.method ? `They spotted you (${info.method}).` : 'They spotted you.');
     el('div', 'screen-lead', card, `Day ${day}, ${fmtHour(hour)}. ${how}`);
     const S = ctx.stats_summary || {};
     const J = panels?.journal;
@@ -432,10 +461,19 @@ export function create(ctx) {
       [S.plantsGathered || 0, 'plants'],
       [`${J ? J.eggs.size : 0}/${J ? J.eggsTotal : 7}`, 'secrets'],
     ]);
-    const passes = info.passes != null ? ` The search party came by ${info.passes} time${info.passes === 1 ? '' : 's'}.` : '';
+    const passes = !sailed && info.passes != null ? ` The search party came by ${info.passes} time${info.passes === 1 ? '' : 's'}.` : '';
     el('div', 'screen-tip', card, `You made it off Driftwood Isle.${passes} Thanks for playing!`);
     const b = el('button', 'btn', card, 'Play again');
     b.addEventListener('click', () => location.reload());
+  }
+
+  /** Boat name for the 'raft' win: payload.name, else the plan (id or object), else ctx.raft.plan. */
+  function raftName(info) {
+    if (info.name) return info.name;
+    const pl = info.plan;
+    if (typeof pl === 'string' && CONFIG.raft?.plans?.[pl]?.name) return CONFIG.raft.plans[pl].name;
+    if (pl && typeof pl === 'object' && pl.name) return pl.name;
+    return ctx.raft?.plan?.name || 'boat';
   }
 
   // ── init: listeners + helpers ──────────────────────────────────────────
@@ -465,8 +503,12 @@ export function create(ctx) {
         { at: t, id: 'start_cold', text: "You're soaked and freezing. Get out into open sunlight, away from tree shade, to warm up and dry off." },
         { at: t + 14, id: 'start_drink', text: 'Thirsty? Spring Pond lies just inland to the north-east. Look at fresh water and press E to drink. Seawater makes it worse!' },
         { at: t + 30, id: 'start_fire', text: 'For fire you need Flint 🔹 (dark, glassy: beaches and riverbeds) and Pyrite 🪙 (brassy: rocky high ground). Keep an eye out.' },
-        { at: t + 48, id: 'start_keys', text: 'Tab or C opens crafting, J your journal, M the map. Use items with F or right-click.' }
+        { at: t + 48, id: 'start_keys', text: 'Tab or C opens crafting, J your journal, M the map. Use items with F or right-click.' },
+        { at: t + 70, id: 'start_boat', text: 'Your way home: rebuild a boat at the Boatyard on this beach (⛵ on the compass). The tracker at the top-left shows what the next stage needs, and the Journal (J) Boat tab lists every part and where to look.' }
       );
+      diveHintArmed = true;
+      objSig = null;
+      objAcc = 1;
       panels.log('🏝️', 'Washed ashore on an unknown island.');
     });
 
@@ -481,7 +523,7 @@ export function create(ctx) {
           panels.journal.plants.add(p.id);
           panels.log(ITEMS[p.id].icon, `Found ${ITEMS[p.id].name}.`);
         }
-      } else if (first && ITEMS[p.id]) panels.log(ITEMS[p.id].icon, `Picked up ${ITEMS[p.id].name}.`);
+      } else if (first && ITEMS[p.id] && cat !== 'part') panels.log(ITEMS[p.id].icon, `Picked up ${ITEMS[p.id].name}.`);
       if (first) firstItemHints(p.id);
       flashSlot(p.id);
     });
@@ -541,6 +583,32 @@ export function create(ctx) {
       if (p?.source === 'ocean') hint('seawater', 'Seawater dehydrates you. Find fresh water: the pond, the river or the lake.');
     });
     ev.on('player:submerged', () => hint('swim', 'Underwater! Watch your breath bubbles and press Space to swim up.'));
+    // v2: diving + the boat-repair goal
+    ev.on('player:swimStart', () => {
+      // queued a few seconds after the basic swimming hint (the controller shows that one on the same event)
+      if (!diveHintArmed || ctx.state !== 'playing') return;
+      diveHintArmed = false;
+      scheduled.push({ at: playClock + 6, id: 'dive', text: 'Hold X to dive. Breath runs out fast, and a diving mask helps.' });
+    });
+    const refreshObjective = () => {
+      objSig = null;
+      objAcc = 1;
+    };
+    ev.on('raft:part', (p) => {
+      const it = ITEMS[p?.id];
+      if (it) panels.log(it.icon, `Recovered a boat part: ${it.name}.`);
+      refreshObjective();
+    });
+    ev.on('raft:stage', (p) => {
+      const label = p?.stage?.label;
+      panels.log('🔨', label ? `Boat stage done: ${label}.` : 'Finished a boat stage.');
+      refreshObjective();
+    });
+    ev.on('raft:complete', () => {
+      panels.log('⛵', 'The boat is finished!');
+      refreshObjective();
+    });
+    ev.on('item:removed', refreshObjective);
   }
 
   function structName(t) {
@@ -555,6 +623,10 @@ export function create(ctx) {
     if (ITEMS[id]?.cooksInto) hint('cook', 'Raw food is better cooked. Stand at a lit campfire and press R to cook everything you carry.');
     if (id === 'bottle_empty') hint('fill', 'Stand by the pond, river or lake and press R to fill your canteen.');
     if (id === 'torch') hint('torch', 'Press T to light or stow your torch. It burns for 4 hours and keeps a little warmth.');
+    if (id === 'shovel') hint('shovel', 'Wooden Shovel: look for disturbed sand mounds on the beaches and press E to dig up what is buried there.');
+    if (id === 'pickaxe') hint('pickaxe', 'Flint Pickaxe: look for cracked rocks with a glint inside and press E to break them open.');
+    if (id === 'diving_mask') hint('mask', 'Diving Mask: keep it in your pack and your breath lasts much longer underwater. Hold X while swimming to dive.');
+    if (ITEMS[id]?.category === 'part') hint('part', 'A boat part! Carry parts to the Boatyard on the beach where you washed ashore and press E there to build the next stage.');
     if (id === 'flare') hint('flare', 'Save the flare until the search party is close, then select it and press F.');
     if (ITEMS[id]?.category === 'food' && id !== 'toadstool') hint('eat', 'Select food in the hotbar (1-9 or the wheel) and press F or right-click to eat.');
   }
@@ -629,6 +701,13 @@ export function create(ctx) {
       fastAcc = 0;
       updateBars();
       updateHotbar();
+      updateRescue();
+      updateSpecialMarkers();
+    }
+    objAcc += dt;
+    if (objAcc >= 0.5) {
+      objAcc = 0;
+      updateObjective();
     }
     slowAcc += dt;
     if (slowAcc >= 0.25) {
@@ -732,6 +811,98 @@ export function create(ctx) {
     const cloud = ctx.weather?.cloudiness ?? 0;
     const w = rain > 0.55 ? '⛈️' : rain > 0.12 ? '🌧️' : cloud > 0.6 ? '☁️' : cloud > 0.3 ? '⛅' : '';
     if (E.clkWeather.textContent !== w) E.clkWeather.textContent = w;
+    const dl = ctx.difficulty?.label || '';
+    if (E.clkDiff.textContent !== dl) {
+      E.clkDiff.textContent = dl;
+      E.clkDiff.className = 'clk-diff ' + (ctx.difficulty?.id || '');
+      E.clkDiff.title = dl ? `Difficulty: ${dl}` : '';
+    }
+  }
+
+  // ── v2: boat objective tracker ─────────────────────────────────────────
+  function updateObjective() {
+    const hidden = !!ctx.flags.cinematic || ctx.state === 'dead' || ctx.state === 'rescued' || !!ctx.stats?.dead;
+    let v = null;
+    if (!hidden) {
+      try {
+        v = objectiveView(ctx.raft?.objective?.());
+      } catch (e) {
+        v = null;
+      }
+    }
+    const sig = objectiveSig(v);
+    if (sig === objSig) return;
+    objSig = sig;
+    E.obj.classList.toggle('show', !!v);
+    if (!v) return;
+    E.objTitle.textContent = v.title;
+    E.objStage.textContent = v.stage;
+    E.objNeeds.textContent = '';
+    for (const n of v.needs) {
+      const c = el('span', 'obj-need ' + (n.ok ? 'have' : 'miss'), E.objNeeds);
+      c.textContent = `${n.icon} ${Math.min(n.have, n.need)}/${n.need}${n.ok ? ' ✓' : ''}`;
+      c.title = n.name;
+    }
+    E.objHint.textContent = v.complete ? v.hint || 'Launch it from the Boatyard!' : v.hint;
+    E.objHint.style.display = E.objHint.textContent ? '' : 'none';
+    E.objReady.style.display = v.ready ? '' : 'none';
+    E.obj.classList.toggle('ready', v.ready);
+  }
+
+  // ── v2: search-party banner + compass markers ──────────────────────────
+  function updateRescue() {
+    const pass = !ctx.flags.cinematic && ctx.state === 'playing' ? ctx.rescue?.activePass : null;
+    const kind = pass ? (pass.kind === 'boat' ? 'boat' : 'helicopter') : null;
+    if (kind !== rescueKind) {
+      rescueKind = kind;
+      E.rescue.classList.toggle('show', !!kind);
+      E.rescueTitle.textContent = kind === 'boat' ? '🚤 Search boat offshore!' : kind ? '🚁 Search helicopter overhead!' : '';
+      E.cmpRescue.textContent = kind === 'boat' ? '🚤' : '🚁';
+      rescuePct = -1;
+      rescueTipKey = '';
+    }
+    if (!kind) return;
+    const a = clamp01(ctx.rescue?.attention ?? 0);
+    const pct = Math.round(a * 100);
+    if (pct !== rescuePct) {
+      rescuePct = pct;
+      E.rescueFill.style.width = pct + '%';
+      E.rescue.classList.toggle('hot', a >= 0.5);
+    }
+    const tipKey = a >= 0.5 ? 'hot' : 'cold';
+    if (tipKey !== rescueTipKey) {
+      rescueTipKey = tipKey;
+      E.rescueTip.textContent =
+        tipKey === 'hot'
+          ? "They're turning toward you! Keep waving (G) and keep your signals burning."
+          : 'Get into the open, hold G to wave, light a signal fire';
+    }
+  }
+
+  function placeCmpMarker(m, dx, dz, h, w, icon, clampEdges) {
+    // clamped markers sit inside the strip's faded edges; free ones use the structure markers' range
+    const pl = compassPlace(relBearing(h, dx, dz), w, PX_PER_DEG, clampEdges ? Math.max(30, w * 0.19) : 20);
+    if (pl.edge && !clampEdges) {
+      if (m.style.display !== 'none') m.style.display = 'none';
+      return;
+    }
+    const text = pl.edge < 0 ? '◀' + icon : pl.edge > 0 ? icon + '▶' : icon;
+    if (m.textContent !== text) m.textContent = text;
+    m.style.left = pl.x.toFixed(0) + 'px';
+    if (m.style.display !== 'block') m.style.display = 'block';
+  }
+
+  function updateSpecialMarkers() {
+    const p = ctx.player?.position;
+    const w = E.compass.clientWidth || 520;
+    const h = heading();
+    const pp = rescueKind ? ctx.rescue?.activePass?.position : null;
+    if (p && pp) placeCmpMarker(E.cmpRescue, pp.x - p.x, pp.z - p.z, h, w, rescueKind === 'boat' ? '🚤' : '🚁', true);
+    else if (E.cmpRescue.style.display !== 'none') E.cmpRescue.style.display = 'none';
+    const site = ctx.raft?.site;
+    const far = p && site ? Math.hypot(site.x - p.x, site.z - p.z) > 6 : false;
+    if (far) placeCmpMarker(E.cmpYard, site.x - p.x, site.z - p.z, h, w, '⛵', false);
+    else if (E.cmpYard.style.display !== 'none') E.cmpYard.style.display = 'none';
   }
 
   function statMax(key) {
@@ -782,6 +953,13 @@ export function create(ctx) {
       if (n !== barCache.bubbles) {
         barCache.bubbles = n;
         for (let i = 0; i < 10; i++) E.bubbles[i].classList.toggle('gone', i >= n);
+      }
+      // v2: depth while diving
+      const depth = under ? ctx.player?.depth ?? 0 : 0;
+      const dTxt = depth >= 0.5 ? `↓ ${depth.toFixed(1)} m` : '';
+      if (dTxt !== barCache.depth) {
+        barCache.depth = dTxt;
+        E.depth.textContent = dTxt;
       }
     }
   }
@@ -904,6 +1082,8 @@ export function create(ctx) {
     if (it.category === 'food') return '[F] Eat';
     if (it.category === 'drink') return '[F] Drink';
     if (it.category === 'medicine') return '[F] Use';
+    if (id === 'shovel' || id === 'pickaxe' || id === 'diving_mask') return '[F] How to use it';
+    if (it.category === 'part') return 'Boat part: bring it to the Boatyard';
     return '[Tab] Craft with it';
   }
 

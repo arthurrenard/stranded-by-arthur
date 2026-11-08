@@ -5,6 +5,8 @@
 //
 // Time bases (see model.js): energy / breath / poison / nausea use real dt; heat, wetness, need damage and
 // regen use dt x timeScale; thirst / hunger drains use ctx.time.dtHours.
+// v2: ctx.difficulty (read lazily every frame; default easy) scales drains / damage / regen, thirst 0 is fatal
+// (CONFIG.stats.thirstZeroKills), nights get colder every day (M.nightChill) and the diving mask halves breath drain.
 import { CONFIG } from '../config.js';
 import * as M from './model.js';
 
@@ -19,8 +21,8 @@ const VALID_CAUSES = new Set(['dehydration', 'starvation', 'hypothermia', 'heats
 // Flavor text for warnings: [type][level] -> lines (rotated). Icons / toast kinds per type.
 const MESSAGES = {
   thirst: {
-    low: ['Your lips are cracked — you need water', 'Your mouth feels like sand. Find fresh water.', 'Thirsty… a stream or the lake would do.'],
-    critical: ["You're dizzy with thirst — drink something, now!", 'Your head pounds. You need fresh water!'],
+    low: ['Your lips are cracked: you need water soon', 'Your mouth feels like sand. Find fresh water before it runs out.', 'Thirsty… a stream, the lake or a coconut would do.'],
+    critical: ["You're dying of thirst: drink NOW!", "You're dying of thirst: drink NOW! Any fresh water, a coconut…"],
   },
   hunger: {
     low: ['Your stomach growls. Forage something to eat.', 'You feel hollow — berries, nuts, roots… anything.', 'Hungry. The forest must have something edible.'],
@@ -72,6 +74,7 @@ export function create(ctx) {
   // Live environment (also the model's env input; stable object)
   const env = {
     airTemp: 15,
+    nightChill: 0, // °C, <= 0: the extra cold of later nights (in airTemp, partly cancelled near a fire: M.shieldedChill)
     sun: 0,
     sunElevation: 0,
     wind: DEFAULT_WEATHER.wind,
@@ -87,7 +90,7 @@ export function create(ctx) {
     wetness: values.wetness,
   };
   const act = { moving: false, sprinting: false, swimming: false, sinking: false, headUnderwater: false, sleeping: false };
-  const tickIn = { dtReal: 0, dtSim: 0, dtHours: 0, env, act, god: false };
+  const tickIn = { dtReal: 0, dtSim: 0, dtHours: 0, env, act, god: false, diff: null, breathMul: 1 };
   const report = {};
 
   let dead = false;
@@ -107,6 +110,7 @@ export function create(ctx) {
   // Positive one-off toasts (re-armed by the opposite condition)
   let dryToastArmed = true;
   let warmToastArmed = true;
+  let lastNightWarn = -1; // night index of the last dusk "colder tonight" toast
 
   // ── Helpers ────────────────────────────────────────────────────────────
   function playerPos() {
@@ -135,8 +139,11 @@ export function create(ctx) {
     env.cloudiness = clamp01(num(w?.cloudiness, DEFAULT_WEATHER.cloudiness));
     env.wind = clamp(num(w?.wind?.strength, num(u?.uWindStrength?.value, DEFAULT_WEATHER.wind)), 0, 1.5);
     const airTempOffset = num(w?.airTempOffset, 0);
-    env.airTemp = M.airTemperature(num(t?.hour, 12), { rain: env.rain, cloudiness: env.cloudiness, airTempOffset });
+    const D = M.difficultyOf(ctx.difficulty);
+    env.nightChill = M.nightChill(num(t?.hoursTotal, num(t?.hour, 12)), num(D.nightChillPerDay, 0)); // nights get worse every day
+    env.airTemp = M.airTemperature(num(t?.hour, 12), { rain: env.rain, cloudiness: env.cloudiness, airTempOffset }); // + chill below
     env.sunElevation = num(t?.sunDir?.y, 0.5);
+    tickIn.breathMul = ctx.inventory?.has?.('diving_mask') ? 0.5 : 1; // the mask lets you stay down twice as long
 
     const p = playerPos();
     let canopy = 0,
@@ -176,6 +183,7 @@ export function create(ctx) {
     }
     env.canopy = canopy;
     env.fire = fire;
+    env.airTemp += M.shieldedChill(env.nightChill, fire); // later nights are colder, a little less so at a fire
     env.torch = torch;
     env.sheltered = sheltered;
     env.sun = M.sunExposure(num(t?.daylight, 1), canopy, env.cloudiness, sheltered);
@@ -293,6 +301,21 @@ export function create(ctx) {
       warmToastArmed = false;
       toast(env.fire > 0.3 ? "The fire's warmth seeps into your bones" : 'You feel warm again', { icon: '🌡️', kind: 'good' });
     }
+    // At dusk: tell the player tonight will be colder than the last (nights get worse every day).
+    const hT = num(ctx.time?.hoursTotal, NaN);
+    if (Number.isFinite(hT)) {
+      const hour = ((hT % 24) + 24) % 24;
+      const night = Math.floor((hT + 12) / 24);
+      if (hour >= 17.5 && hour < 20 && night !== lastNightWarn) {
+        lastNightWarn = night;
+        const D = M.difficultyOf(ctx.difficulty);
+        const chill = Math.min(M.K.nightChillMax, num(D.nightChillPerDay, 0) * night);
+        if (chill >= 2.5) {
+          const fireTip = env.fire > 0.3 ? 'Keep that fire fed!' : 'Get a fire going before dark!';
+          toast(`Night ${night} is coming, about ${Math.round(chill)}°C colder than usual. ${fireTip}`, { icon: '🌙', kind: 'warn', duration: 6 });
+        }
+      }
+    }
   }
 
   function reset() {
@@ -304,6 +327,7 @@ export function create(ctx) {
     hurtEmitTimer = 0;
     dryToastArmed = true;
     warmToastArmed = true;
+    lastNightWarn = -1;
     for (const k in lastWarn) delete lastWarn[k];
     envTimer = 0;
   }
@@ -353,6 +377,11 @@ export function create(ctx) {
         eff = { ...eff };
         delete eff.health;
       }
+      if ((eff.health ?? 0) < 0) {
+        // raw food / seawater hits count as poison / dehydration: x difficulty.damageMul (copy: never mutate item defs)
+        const m = num(M.difficultyOf(ctx.difficulty).damageMul, 1);
+        if (m !== 1) eff = { ...eff, health: eff.health * m };
+      }
       const d = M.applyEffects(values, eff, S);
       if ((d.health ?? 0) < 0) {
         const cause = causeFromEffects(eff, source);
@@ -398,18 +427,27 @@ export function create(ctx) {
         await fade(1, 1.2);
         sampleEnv(); // fire / shelter at bedtime
         const fireAtBed = env.fire;
+        const D = M.difficultyOf(ctx.difficulty);
+        const t0 = num(ctx.time?.hoursTotal, NaN);
+        let chill = 0; // average night chill over the sleep (°C): later nights freeze an open-air sleeper
+        if (Number.isFinite(t0)) {
+          for (let i = 0; i <= 8; i++) chill += M.nightChill(t0 + (hours * i) / 8, num(D.nightChillPerDay, 0)) / 9;
+        }
         ctx.time?.skipHours?.(hours); // structures burns (and may put out) fires synchronously here
         sampleEnv(); // fire state at wake-up
         const fire = (fireAtBed + env.fire) / 2; // a fire that died mid-night only half counts
-        const r = M.simulateSleep(values, hours, { fire, sheltered: env.sheltered, rain: env.rain }, S);
+        const secPerHour = num(CONFIG.time?.dayLengthSec, 720) / 24;
+        const r = M.simulateSleep(values, hours, { fire, sheltered: env.sheltered, rain: env.rain, chill }, S, secPerHour, D);
         ctx.events.emit('stats:sleep', { hours, ...r });
         envTimer = 0;
         await fade(0, 1.5);
         let text = 'You wake up rested';
-        if (values.thirst < 15) text = 'You wake up rested, but your throat is parched';
+        let kind = 'good';
+        if (r.froze) (text = 'You wake up half-frozen. You need a fire at night!'), (kind = 'bad');
+        else if (values.thirst < 15) (text = "You wake up parched: drink NOW, or you'll die of thirst!"), (kind = 'bad');
         else if (values.hunger < 15) text = 'You wake up rested, but starving';
         else if (values.heat < M.K.warn.cold[0]) text = 'You wake up stiff with cold';
-        toast(text, { icon: '🌅', kind: 'good' });
+        toast(text, { icon: r.froze ? '🥶' : '🌅', kind });
         return true;
       } catch (e) {
         console.error('[stats] sleep failed', e);
@@ -443,6 +481,7 @@ export function create(ctx) {
       tickIn.dtSim = dt * num(ctx.time?.timeScale, 1);
       tickIn.dtHours = num(ctx.time?.dtHours, 0);
       tickIn.god = !!ctx.flags.godMode;
+      tickIn.diff = M.difficultyOf(ctx.difficulty); // lazily: the title screen may change it before game:start
       M.tick(values, tickIn, S, report);
       env.target = report.target;
 

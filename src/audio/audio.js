@@ -78,6 +78,7 @@ export function create(ctx) {
   };
   let senseT = 0;
   const windOut = { base: 0, howl: 0, rustle: 0 };
+  const windOpts = { canopy: 0, storm: 0, coast: 0, forest: 0 }; // v2: canopy / inland quieting + storm override (beds.js)
   let hbT = 0;
   let wet = 0;
 
@@ -561,7 +562,11 @@ export function create(ctx) {
     beds.ocean.update(t, dt, oceanLevel(S.coast, S.alt, storm), oceanCutoff(S.coast), oceanPan, storm);
 
     windLevels(windOut, windS, S.alt, S.canopy, storm, S.forest);
-    beds.wind.update(t, dt, windOut, windS);
+    windOpts.canopy = S.canopy;
+    windOpts.storm = storm;
+    windOpts.coast = Number.isFinite(S.coast) ? S.coast : 0;
+    windOpts.forest = S.forest;
+    beds.wind.update(t, dt, windOut, windS, windOpts);
 
     const muffled = Math.max(ctx.flags?.sheltered ? 0.6 : 0, S.canopy * 0.45, under ? 1 : 0);
     beds.rain.update(t, dt, rain, muffled);
