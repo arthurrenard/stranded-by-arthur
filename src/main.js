@@ -26,6 +26,8 @@ import * as Inventory from './gameplay/inventory.js';
 import * as Crafting from './gameplay/crafting.js';
 import * as Structures from './gameplay/structures.js';
 import * as Raft from './gameplay/raft.js';
+import * as Isle2 from './isle2/isle2.js';
+import * as Vehicles from './gameplay/vehicles.js';
 import * as Rescue from './story/rescue.js';
 import * as EasterEggs from './story/eastereggs.js';
 import * as Intro from './story/intro.js';
@@ -178,6 +180,8 @@ function boot() {
   add('crafting', Crafting);
   add('structures', Structures);
   add('raft', Raft);
+  add('isle2', Isle2);
+  add('vehicles', Vehicles);
   add('rescue', Rescue);
   add('eastereggs', EasterEggs);
   add('intro', Intro);

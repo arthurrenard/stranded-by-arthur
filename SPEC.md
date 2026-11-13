@@ -395,3 +395,44 @@ Expose `ctx.player.diving` (bool) and `ctx.player.depth` (m below the surface, e
 ### Tool recipes (V2-C, recipes.js)
 Shovel: wood 2 + stone 1 + rope 1 · Flint Pickaxe: wood 2 + flint 1 + rope 1 (keeps 1 flint so fire still works only if the player
 has 2, so warn) · Diving Mask: bamboo 1 + cloth 1 + rope 1.
+
+---
+## 11. Update v3 (2026-11-13): Tempest Isle, travel by water, harsher rules
+Core (orchestrator, done): Tempest Isle terrain in `src/world/heightfield.js`, a second grid merged into every query.
+- `ctx.world.isle2` = `{ id:'isle2', name:'Tempest Isle', x:660, z:-640, R:150, half, x0, z0, cell, cells, N1, toMain, heights, peak:{x,z,height≈100,plateauR:9} }`
+- `ctx.world.grids` = `[{ id:'main'|'isle2', heights, x0, z0, cell, cells, N1 }]`; `buildGeometry('isle2')` builds the second terrain mesh.
+- `ctx.world.islandAt(x,z)` → `'main'|'isle2'|null`; `ctx.world.isle2ness(x,z)`; `randomLandPoint(rng, filter, maxTries, 'isle2')`.
+- heightAt/waterAt/biomeAt/coastDistance/slopeAt cover both islands. `lakes` has a third entry `{id:'isle2pond', island:'isle2'}`
+  (every lake has `island`).
+- Landmarks: `isle2` (center), `isle2Cove` (landing beach), `isle2Dock` {x,z (on the beach at the waterline), dirX, dirZ (seaward),
+  length 18 (end depth ~3 m)}, `isle2Hut` (summit plateau, y≈100), `isle2Pond`, `launchBeach` (main-island beach facing the isle,
+  525 m of sea to the cove).
+- Config: `CONFIG.isle2` (storms), `CONFIG.vehicles`, `CONFIG.palmDeathChance` 0.05, `stats.start.thirst` 45,
+  difficulty `rescueMul` (1 / 0.3 / 0) and `flareRange` (700 / 250 / 0), `CONFIG.raft.parts.compass.where = 'isle2hut'`.
+- Items: paddle, fishing_rod, boat_key, banana, old_boot.
+- New systems (main order: …raft, **isle2**, **vehicles**): `src/isle2/isle2.js` → `ctx.isle2`, `src/gameplay/vehicles.js` → `ctx.vehicles`.
+
+### Ownership (v3)
+| builder | files |
+|---|---|
+| V3-A world+rules | src/world/terrain.js, water.js, sky.js, weather.js (+world/fx/*), src/gameplay/structures.js (storm douse only), src/story/rescue.js + rescueLogic.js, src/nature/res/treeHarvest.js |
+| V3-B isle content | src/isle2/* (new), src/nature/flora.js + flora/*, src/nature/resources.js + res/* (NOT treeHarvest.js), src/gameplay/raft-parts.js |
+| V3-C vehicles+HUD | src/gameplay/vehicles.js (+vehicle-*.js), src/player/controller.js, src/gameplay/recipes.js + crafting.js, src/gameplay/raft.js + raft-logic.js, src/ui/hud*.js + hud.css |
+
+### Contracts between them
+- **Weather (A)**: `ctx.weather.stormAt(x,z)` → 0..1 local Tempest Isle storm intensity; `ctx.weather.hailAt(x,z)` → 0..1;
+  `ctx.weather.isle2Storm` = `{ active, intensity, endsAtHours }`; events `isle2:stormStart` / `isle2:stormEnd`. The existing global fields
+  (`rain, cloudiness, wind, storm, airTempOffset`) describe the weather **at the camera**, so the local storm is folded in there.
+  Audio, stats and particles then follow automatically.
+- **Indoors (B)**: the fishing hut adds `{ position, radius, indoor: true }` to `ctx.shelters`. `ctx.isle2.isIndoors(pos)` → bool.
+  Storms douse every lit fire/torch whose position is not indoors (A, in structures.js). Hail hurts only when not indoors/sheltered.
+- **Motorboat (B → C)**: `ctx.isle2.motorboat` = `{ object: THREE.Object3D, position: Vector3, heading (rad, yaw convention), moored: bool }`.
+  B builds it moored at the dock end. C makes it rideable (needs `boat_key`, and one `fuel_can` used on the first start).
+- **Hut parts (B → C)**: `ctx.isle2.partsInHut()` → `[{ id, taken }]` for raft parts whose `where === 'isle2hut'` (C shows them in raft.parts()
+  with `where:'isle2hut'`). Searching the hut gives fishing rods, the boat key, a fuel can, and the plan's isle2hut parts.
+- **Vehicles (C)**: `ctx.vehicles.current` = null | `{ type:'paddle_raft'|'motorboat'|'boat', object, speed }`. While aboard, `ctx.player.aboard`
+  is the vehicle, the controller skips walking/swimming physics, and the currents/boundary don't apply. Rafts and sail boats can
+  **capsize** in `stormAt > 0.5` (CONFIG.isle2.capsizePerSec × intensity): the player is thrown into the water, and the raft drifts upside
+  down until it is righted ([E] when stormAt < 0.3). Motorboat win: driving out to open sea away from both islands (> 1300 m from the
+  main center, or [R] "Head for home" when > 250 m off any coast) → `raft:sailed` {plan:'motorboat_dock', name:"the fisherman's motorboat", day}.
+- **Death causes (C shows)**: 'coconut' (A, treeHarvest), 'hail' (A, weather), 'fire' (B: standing in the burning hut).

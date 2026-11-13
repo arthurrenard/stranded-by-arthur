@@ -34,7 +34,7 @@ export const CONFIG = {
   },
 
   stats: {
-    start: { health: 88, thirst: 62, hunger: 72, energy: 75, heat: 30, wetness: 1, breath: 100 },
+    start: { health: 88, thirst: 45, hunger: 72, energy: 75, heat: 30, wetness: 1, breath: 100 }, // you swallowed seawater: start thirsty
     // Drains per in-game hour
     thirstPerHour: 4.0, // 100 -> 0 in ~25 game hours (x difficulty.thirstMul)
     hungerPerHour: 4.2, // 100 -> 0 in ~24 game hours (x difficulty.hungerMul)
@@ -103,6 +103,8 @@ export const CONFIG = {
         earlyDamageBelow: 0, // hard: health starts dropping when hunger/thirst fall below this
         earlyDamagePerSec: 0,
         nightChillPerDay: 1.5, // °C colder at night for each day survived (nights get worse)
+        rescueMul: 1, // multiplier on the search party's attention gain
+        flareRange: 700, // m: a flare within this of a pass = instant spot (0 = flares are never seen)
         plan: 'raft',
       },
       medium: {
@@ -115,6 +117,8 @@ export const CONFIG = {
         earlyDamageBelow: 0,
         earlyDamagePerSec: 0,
         nightChillPerDay: 2.6,
+        rescueMul: 0.3, // hard to be seen: build a boat or work very hard on signals
+        flareRange: 250,
         plan: 'sailboat',
       },
       hard: {
@@ -127,6 +131,8 @@ export const CONFIG = {
         earlyDamageBelow: 30,
         earlyDamagePerSec: 0.22, // at 0 (scales linearly from earlyDamageBelow down to 0)
         nightChillPerDay: 3.6,
+        rescueMul: 0, // the search party can't see you at all: your only way home is by boat
+        flareRange: 0,
         plan: 'motorboat',
       },
     },
@@ -179,7 +185,7 @@ export const CONFIG = {
       hull_plank: { where: 'beach', count: { raft: 5, sailboat: 7, motorboat: 9 } },
       mast_pole: { where: 'beach', count: { raft: 1, sailboat: 1, motorboat: 0 } },
       rudder: { where: 'buried', count: { raft: 0, sailboat: 1, motorboat: 1 } },
-      compass: { where: 'buried', count: { raft: 0, sailboat: 1, motorboat: 1 } },
+      compass: { where: 'isle2hut', count: { raft: 0, sailboat: 1, motorboat: 1 } }, // in the fishing hut on Tempest Isle
       fuel_can: { where: 'buried', count: { raft: 0, sailboat: 0, motorboat: 1 } },
       spark_plug: { where: 'rock', count: { raft: 0, sailboat: 0, motorboat: 1 } },
       engine_block: { where: 'underwater', count: { raft: 0, sailboat: 0, motorboat: 1 } },
@@ -187,6 +193,22 @@ export const CONFIG = {
     },
     extraSailcloth: { raft: 1, sailboat: 2, motorboat: 0 }, // cloth bundles washed up on beaches (crate1 gives 2)
   },
+
+  // Tempest Isle (second island): violent local storms + travel by water.
+  isle2: {
+    stormChance: 0.4, // chance that each half-day (06-18 / 18-06) brings a storm to Tempest Isle
+    stormRampSec: 30, // real seconds for a storm to roll in or clear (they come in quick)
+    stormInner: 320, // m from the isle center: full storm inside this
+    stormOuter: 560, // m: no storm beyond this (the main island is never affected)
+    hailDamagePerSec: 0.45, // while exposed to hail (x difficulty damageMul)
+    capsizePerSec: 0.06, // chance per second at full storm that a raft or sailboat flips
+  },
+  vehicles: {
+    paddleRaft: { speed: 2.3, reverse: 1.0, turnRate: 0.9, energyPerSec: 0.45 }, // slow but it gets you there
+    motorboat: { speed: 8.5, reverse: 2.5, turnRate: 1.1 },
+    boardRadius: 3.2,
+  },
+  palmDeathChance: 0.05, // shaking a palm: a coconut may land on your head (game over)
 
   keys: {
     forward: ['KeyW', 'ArrowUp'],

@@ -180,6 +180,26 @@ export const ITEMS = {
     category: 'tool',
     desc: 'A flint head lashed to a handle. Breaks open cracked rocks where something glints inside.',
   },
+  paddle: {
+    name: 'Wooden Paddle',
+    icon: '🛶',
+    category: 'tool',
+    desc: 'A carved paddle. You need one to paddle a raft (W/S to paddle, A/D to steer).',
+  },
+  fishing_rod: {
+    name: 'Fishing Rod',
+    icon: '🎣',
+    category: 'tool',
+    desc: 'From the fishing hut. You won\'t eat fish, but the sea gives up all kinds of lost things. Use it (F) at the water.',
+  },
+  boat_key: {
+    name: 'Motorboat Key',
+    icon: '🔑',
+    category: 'tool',
+    desc: 'A brass key on a cork float. It starts the fisherman\'s motorboat at the Tempest Isle dock.',
+  },
+  banana: { name: 'Wild Banana', icon: '🍌', category: 'food', desc: 'Sweet and filling. Grows on Tempest Isle.', effects: { hunger: 14, thirst: 4, energy: 6 } },
+  old_boot: { name: 'Old Boot', icon: '🥾', category: 'resource', desc: 'Soggy, smelly and completely useless. Classic fishing catch.' },
   diving_mask: {
     name: 'Diving Mask',
     icon: '🤿',

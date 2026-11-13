@@ -42,3 +42,14 @@ pickaxe / underwater by diving), with more intricate plans per difficulty; plus 
 - [x] Core (orchestrator): CONFIG.difficulty + CONFIG.raft + keys.dive, new items, main difficulty + raft win, title picker, SPEC §10
 - [x] V2 builders (3 agents, run wf_0679da67-c68, same-session resume only): A tweaks, B raft, C dive+tools+HUD. If interrupted, read docs/build-log/V2-*.md. See SPEC §10 ownership. Check: `grep -l "// STUB" -r src`
 - [x] Integrate + playtest (difficulty picker, raft plans, full Easy build + launch + win, shovel dig, apple picking, diving for the engine, thirst-0 death). Commit + push.
+
+## v3 update (2026-11-13): requested by the user
+Requests: [E] key badge not bold; 5% palm-shake coconut death; start more thirsty; hunger icon = steak 🥩; Medium = hard to be
+seen, Hard = impossible to be seen (boat only); TEMPEST ISLE (smaller second island, a faint outline from the beach and clear from the
+summit; a fishing hut atop a dangerous mountain with fishing rods; a motorboat at a dock; violent local storms 40% of half-days with
+hail, quick onset, raft/sailboat capsizing, wind dousing outdoor fires; the hut can be set on fire for fun); a paddle raft + paddle
+to reach it slowly; more quirks, and a longer objective.
+- [x] Core (orchestrator): isle2 terrain grid + queries + landmarks, CONFIG.isle2/vehicles/palmDeathChance/rescueMul/flareRange,
+  new items, isle2/vehicles stubs wired in main, SPEC §11 contracts + ownership
+- [ ] V3 builders (3 agents): A world+rules, B isle content, C vehicles+HUD. Check: `grep -l "// STUB" -r src`
+- [ ] Integrate + playtest, commit + push (Pages auto-deploys)
