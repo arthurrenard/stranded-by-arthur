@@ -210,6 +210,27 @@ export const CONFIG = {
   },
   palmDeathChance: 0.05, // shaking a palm: a coconut may land on your head (game over)
 
+  // Fishing minigame (src/gameplay/fishing.js): cast, wait, hook, reel with a tension bar.
+  fishing: {
+    biteMinSec: 20, // real seconds before a fish bites (min)
+    biteMaxSec: 45, // (max)
+    hookWindowSec: 2.2, // press reel within this of the bite or the fish is gone
+    reelTapGain: 0.11, // progress per reel tap
+    reelDrain: 0.03, // progress lost per second while the fish fights
+    tensionPerTap: 0.17, // tension added per tap (snaps the line at 1)
+    tensionRelaxPerSec: 0.5,
+    fightDurationSec: [6, 14], // a fish fights this long (bigger = longer)
+    loot: { raw_fish: 0.5, big_fish: 0.14, crab: 0.14, old_boot: 0.1, rope: 0.04, cloth: 0.04, hull_plank: 0.04 },
+  },
+
+  // Multiplayer groundwork (src/net/*, server/). Offline by default: the game is fully playable alone.
+  net: {
+    defaultServer: '', // e.g. 'wss://stranded-by-arthur.fly.dev'; can also be set with ?server=
+    tickHz: 15, // state updates per second sent to the server
+    maxPlayers: 8,
+    interpolationMs: 120, // remote avatars are rendered this far in the past for smooth motion
+  },
+
   keys: {
     forward: ['KeyW', 'ArrowUp'],
     back: ['KeyS', 'ArrowDown'],
@@ -226,6 +247,9 @@ export const CONFIG = {
     torch: ['KeyT'],
     wave: ['KeyG'],
     dive: ['KeyX'], // hold to dive while swimming (Space rises)
+    reel: ['Space', 'Mouse0'], // fishing: hook and reel
+    chat: ['Enter'], // multiplayer chat
+    scoreboard: ['KeyP'], // multiplayer: who is online
     hotbar: ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'],
     mute: ['KeyN'],
   },

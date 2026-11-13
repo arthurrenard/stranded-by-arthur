@@ -231,3 +231,68 @@ body.debug #debug-errors {
 .diff[data-difficulty='hard'] b {
   color: #ff8a6b;
 }
+
+/* Pause: multiplayer panel (wired by src/net/net.js) */
+.mp {
+  margin: 6px auto 14px;
+  max-width: 560px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  text-align: left;
+  cursor: default;
+  font-size: 14px;
+}
+.mp-title {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 13px;
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+}
+.mp-status {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink-dim);
+}
+.mp-row {
+  display: flex;
+  gap: 8px;
+  margin: 6px 0;
+}
+.mp input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+.mp input#mp-room {
+  flex: 0 0 110px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+.mp button {
+  font: inherit;
+  color: var(--ink);
+  background: rgba(242, 179, 91, 0.2);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.mp button:hover {
+  background: rgba(242, 179, 91, 0.4);
+}
+.mp-players {
+  font-size: 13px;
+  color: var(--ink-dim);
+  margin-top: 6px;
+}

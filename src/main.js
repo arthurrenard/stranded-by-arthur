@@ -28,6 +28,8 @@ import * as Structures from './gameplay/structures.js';
 import * as Raft from './gameplay/raft.js';
 import * as Isle2 from './isle2/isle2.js';
 import * as Vehicles from './gameplay/vehicles.js';
+import * as Net from './net/net.js';
+import * as Fishing from './gameplay/fishing.js';
 import * as Rescue from './story/rescue.js';
 import * as EasterEggs from './story/eastereggs.js';
 import * as Intro from './story/intro.js';
@@ -182,6 +184,8 @@ function boot() {
   add('raft', Raft);
   add('isle2', Isle2);
   add('vehicles', Vehicles);
+  add('fishing', Fishing);
+  add('net', Net, { always: true });
   add('rescue', Rescue);
   add('eastereggs', EasterEggs);
   add('intro', Intro);

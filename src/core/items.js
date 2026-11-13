@@ -90,7 +90,7 @@ export const ITEMS = {
     icon: '🥥',
     category: 'food',
     desc: 'Fallen from a palm. Coconut water and flesh.',
-    effects: { hunger: 10, thirst: 22 },
+    effects: { hunger: 7, thirst: 14 },
   },
   cattail: {
     name: 'Cattail Root',
@@ -106,6 +106,32 @@ export const ITEMS = {
     category: 'food',
     desc: 'Stings raw. Boiled into soup (with a full canteen at a fire) it is nourishing.',
     effects: { hunger: 3, health: -2 },
+  },
+
+  // ── Fish (caught with the fishing rod; cook them at a fire) ──
+  raw_fish: {
+    name: 'Reef Fish',
+    icon: '🐟',
+    category: 'food',
+    desc: 'A small silver fish. Raw it sits badly; grilled it is a proper meal.',
+    effects: { hunger: 6, health: -2, nausea: 5 },
+    cooksInto: 'grilled_fish',
+  },
+  big_fish: {
+    name: 'Yellowfin',
+    icon: '🐠',
+    category: 'food',
+    desc: 'A big, strong fish. It fought hard. Grill it!',
+    effects: { hunger: 10, health: -2, nausea: 5 },
+    cooksInto: 'grilled_bigfish',
+  },
+  crab: {
+    name: 'Rock Crab',
+    icon: '🦀',
+    category: 'food',
+    desc: 'Snappy. Better boiled red over the fire.',
+    effects: { hunger: 4, health: -1 },
+    cooksInto: 'cooked_crab',
   },
 
   // ── Food (cooked) ───────────────────────────────────────────────────────
@@ -126,6 +152,15 @@ export const ITEMS = {
     effects: { hunger: 15, heat: 3 },
   },
   roasted_cattail: { name: 'Roasted Cattail', icon: '🌽', category: 'food', desc: 'Like a woody potato.', effects: { hunger: 16 } },
+  grilled_fish: { name: 'Grilled Fish', icon: '🍣', category: 'food', desc: 'Crisp skin, flaky and hot.', effects: { hunger: 30, health: 4, heat: 4 } },
+  grilled_bigfish: {
+    name: 'Grilled Yellowfin',
+    icon: '🍱',
+    category: 'food',
+    desc: 'A feast. Enough for the whole day.',
+    effects: { hunger: 48, health: 8, energy: 12, heat: 5 },
+  },
+  cooked_crab: { name: 'Cooked Crab', icon: '🦐', category: 'food', desc: 'Sweet white meat.', effects: { hunger: 18, health: 3 } },
   nettle_soup: {
     name: 'Nettle Soup',
     icon: '🍲',

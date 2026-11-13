@@ -58,6 +58,21 @@
           <label>Mouse sensitivity <input id="opt-sens" type="range" min="0.3" max="2.5" step="0.05" value="1" /></label>
           <label>Volume <input id="opt-vol" type="range" min="0" max="1" step="0.05" value="0.8" /></label>
         </div>
+        <!-- Multiplayer (wired by src/net/net.js). Hidden until the net module enables it. -->
+        <div id="mp" class="mp hidden" data-stop>
+          <div class="mp-title">🌐 Multiplayer <span id="mp-status" class="mp-status">offline</span></div>
+          <div class="mp-row">
+            <input id="mp-name" type="text" maxlength="16" placeholder="Your name" autocomplete="off" />
+            <input id="mp-server" type="text" placeholder="Server (wss://…)" autocomplete="off" />
+          </div>
+          <div class="mp-row">
+            <button id="mp-create" type="button">Create session</button>
+            <input id="mp-room" type="text" maxlength="6" placeholder="Room code" autocomplete="off" />
+            <button id="mp-join" type="button">Join</button>
+            <button id="mp-leave" type="button" class="hidden">Leave</button>
+          </div>
+          <div id="mp-players" class="mp-players"></div>
+        </div>
         <div class="controls">
           <span><b>WASD / ZQSD</b> move</span><span><b>Shift</b> sprint</span><span><b>Space</b> jump / swim up</span>
           <span><b>X</b> dive</span><span><b>E / Click</b> interact</span><span><b>R</b> secondary action</span><span><b>F / Right-click</b> use item</span>

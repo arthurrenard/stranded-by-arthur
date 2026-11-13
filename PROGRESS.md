@@ -52,4 +52,16 @@ to reach it slowly; more quirks, and a longer objective.
 - [x] Core (orchestrator): isle2 terrain grid + queries + landmarks, CONFIG.isle2/vehicles/palmDeathChance/rescueMul/flareRange,
   new items, isle2/vehicles stubs wired in main, SPEC §11 contracts + ownership
 - [x] V3 builders DONE (all 3 finished; check passes 97 files / 13 suites; vite build passes). Run wf_11148740-650, same-session resume only): A world+rules, B isle content, C vehicles+HUD. If interrupted, read docs/build-log/V3-*.md. Check: `grep -l "// STUB" -r src`
-- [ ] NEXT: browser playtest BEFORE pushing (the fog GLSL patch in src/world/fx/fogChunks.js is not yet compiled in real WebGL). Test: ?debug=1&skipintro=1, the view from launchBeach and the summit, __game.weather.debugIsle2Storm(true), crafting a paddle + paddle raft, paddling to the isle, the hut (search / hearth / burn), the dock motorboat, fishing. Then git push (Pages auto-deploys).
+- [x] v3 playtested in the browser (fog compiles, storm/hail/douse, hut, dock, motorboat, raft, capsize, fishing) and PUSHED (2026-11-20). (old note: browser playtest BEFORE pushing (the fog GLSL patch in src/world/fx/fogChunks.js is not yet compiled in real WebGL). Test: ?debug=1&skipintro=1, the view from launchBeach and the summit, __game.weather.debugIsle2Storm(true), crafting a paddle + paddle raft, paddling to the isle, the hut (search / hearth / burn), the dock motorboat, fishing. Then git push (Pages auto-deploys).
+
+## v4 update (2026-11-20): requested by the user
+Requests: refine mechanics + optimize; multiplayer groundwork (player bodies, ids, create/join, interaction) while still playable alone
++ a cheap (<$35/mo) server recommendation; smoother wind; better aesthetics in-game (not the title screen); no overlapping HUD text;
+a real fishing minigame (20–45 s bite, reel by pressing a button, can lose the fish, cook fish); coconuts nerfed; intro crash fix (boat
+must not fall apart, camera must not fall through) + more impressive animations; AC-style summit drone shot (first time + replay in the
+stone circle, also during aurora/meteors); stone runes interactable at night with a significant unlock (→ The Giant's Road causeway);
+a Bella message-in-a-bottle easter egg.
+- [x] Core: fish items, coconut nerf, CONFIG.fishing/net + keys, fishing/net stubs wired, #mp pause panel, SPEC §12
+- [ ] Wave 1 (3 agents): A cinematics+secrets, B multiplayer, C fishing+HUD. Check: `grep -l "// STUB" -r src`
+- [ ] Wave 2 (2 agents): D aesthetics+wind, E optimization
+- [ ] Integrate + playtest, commit + push; hosting instructions to the user

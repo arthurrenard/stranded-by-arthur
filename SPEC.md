@@ -436,3 +436,81 @@ Core (orchestrator, done): Tempest Isle terrain in `src/world/heightfield.js`, a
   down until it is righted ([E] when stormAt < 0.3). Motorboat win: driving out to open sea away from both islands (> 1300 m from the
   main center, or [R] "Head for home" when > 250 m off any coast) → `raft:sailed` {plan:'motorboat_dock', name:"the fisherman's motorboat", day}.
 - **Death causes (C shows)**: 'coconut' (A, treeHarvest), 'hail' (A, weather), 'fire' (B: standing in the burning hut).
+
+---
+## 12. Update v4 (2026-11-20): cinematics, secrets, fishing, multiplayer groundwork, polish
+Core (orchestrator, done): fish items (`raw_fish`→`grilled_fish`, `big_fish`→`grilled_bigfish`, `crab`→`cooked_crab`; all cook at a
+campfire through the existing COOKABLE path), coconut nerfed (hunger 7, thirst 14), `CONFIG.fishing`, `CONFIG.net`, keys `reel`
+(Space/Mouse0), `chat` (Enter), `scoreboard` (P); new systems `ctx.fishing` (src/gameplay/fishing.js, after vehicles) and `ctx.net`
+(src/net/net.js, always-on, last); a hidden multiplayer panel `#mp` in the pause overlay (index.html, styles in style.css) with
+`#mp-name #mp-server #mp-create #mp-room #mp-join #mp-leave #mp-status #mp-players`.
+
+### Ownership (v4, wave 1)
+| builder | files |
+|---|---|
+| V4-A cinematics+secrets | src/story/* (intro.js, introSea.js, fx.js, models.js, overlay.js, eastereggs.js, egg*.js, NEW summitShot.js, causeway.js), tests/story*.test.mjs |
+| V4-B multiplayer | src/net/* (NEW), src/player/avatar.js (NEW), server/* (NEW), docs/MULTIPLAYER.md; ID/apply hooks only in src/nature/resources.js, src/gameplay/structures.js, src/gameplay/raft.js |
+| V4-C fishing+HUD | src/gameplay/fishing.js, src/isle2/isle2-fishing.js (retire into fishing.js), the fishing hook in src/isle2/isle2.js, src/ui/hud*.js + hud.css, src/gameplay/inventory.js |
+
+### Ownership (v4, wave 2, after wave 1 lands)
+| V4-D aesthetics+wind | src/world/* (+fx), src/audio/beds.js (wind), the wind model in src/world/weather.js (+fx/weatherModel.js) |
+| V4-E optimization | src/nature/flora/* + flora.js, src/nature/fauna.js + res/fauna*.js, instancing/culling in src/nature/resources.js, scripts/perf.mjs |
+
+### Contracts
+**Intro (A):** the boat must stay rigid through the crash (hull/cabin/mast stay one group; shake and tilt the group), and the camera
+rig must be attached to the boat's transform so it never falls through the deck or below the sea. After impact: hard cut/fade, never
+free fall. "Make it pop": a wave crest at impact, spray burst, flying planks, the swinging lamp, lightning synced with the impact.
+
+**Summit survey (A, `src/story/summitShot.js`):** the first time the player stands on the summit plateau (within landmarks.summit.r)
+→ a ~14 s skippable cinematic: the camera lifts off, does a slow 360° orbit of the main island at ~150 m altitude looking slightly down
+(Tempest Isle visible in the distance), a title card ("DRIFTWOOD ISLE · day N"), then swoops back into the player's eyes. Sets
+`ctx.flags.cinematic`, `ctx.letterbox`, restores camera/yaw/pitch exactly, re-locks the pointer (call `ctx.input.lock()` from the
+skip keydown when possible). Replay: `[E] Survey the island` registered at the center of the stone circle, always available; during the
+circle's aurora/meteor shower the shot keeps those effects running (they are in eastereggs.js: expose `ctx.eastereggs.showActive`).
+Emits `summit:survey` {first}. Must never run while aboard a vehicle, dead, or in another cinematic.
+
+**Rune puzzle (A):** at night (22:00–05:00) each of the 7 standing stones shows a distinct rune glyph (canvas texture) and offers
+`[E] Touch the rune` toggling its glow (chime). The solution = a seeded set of 4 stones; three clues in the world: 4 small glyphs under
+the initials on the carved tree, a scratched glyph row on the castaway camp's tally rock, and a logbook page in the fishing hut ("the four
+that face the storm…"). Found clues appear in the journal (ctx.ui.markJournal('clue:…')). Wrong set lit for > 3 s → the glows fade with a
+low rumble. Correct set → **The Giant's Road** (`causeway.js`): a 30 s cinematic (stones blaze, a beam, the sea pulls back along a line),
+then a stone causeway ~3 m wide rises ~0.7 m above sea level from landmarks.launchBeach to landmarks.isle2Cove (a merged mesh of slabs
+with gaps/puddles + a chain of ctx.colliders with y1 at the deck so it is walkable; permanent), `easter:found` id `causeway` ("The Giant's
+Road"), a big achievement toast, journal entry. Rafts/boats must not collide with it fatally (C: vehicles treat the causeway colliders as
+walls, tag 'causeway'). **Bella bottle (A):** a second message in a bottle on a different beach: text exactly
+"My heart longs for you. I love you Bella" (egg id `bella`). `ctx.eastereggs.total` becomes 9; HUD/journal must read the total from
+`ctx.eastereggs.total` (C), never a literal 7.
+
+**Fishing (C, `ctx.fishing`):** with a `fishing_rod`, looking at any ocean/lake/river water from land, a dock or a raft → `[R] Cast the
+line` (or E when free). The float lands with a plop; wait `CONFIG.fishing.biteMinSec..biteMaxSec` (real seconds, with small nibbles as
+false alarms); a BITE: the float dips, a "!" + sound, press `reel` (Space/click) within `hookWindowSec` or it's gone; then the FIGHT:
+tap reel to add progress (`reelTapGain`) and tension (`tensionPerTap`), tension relaxes over time; progress drains while the fish runs;
+tension ≥ 1 snaps the line (lose the fish, 15 % chance to lose the rod on the biggest fish); a timer runs out → the fish escapes;
+progress ≥ 1 → landed: loot by `CONFIG.fishing.loot` (bigger fish = longer fight), toast with the catch, 'harvest' {kind:'fishing'}.
+API `{ active, phase:'idle'|'waiting'|'bite'|'fight'|'landed'|'lost', progress, tension, timeLeft, cast(), reel(), cancel() }`; the HUD
+shows a tension/progress widget under the crosshair. Movement cancels the cast. The old isle2-fishing.js logic is retired (keep its lore
+bottle as a rare catch). Cooking: the campfire already cooks every COOKABLE item.
+
+**HUD overlap (C):** toasts never overlap: one column, measured heights, at most 4 visible, same-key merge; the objective tracker,
+hint box, storm/rescue banners, vehicle panel, subtitle, prompt and fishing widget get distinct non-overlapping zones at 1280×720 and
+at 1920×1080; subtitles sit above the hotbar; the chip row never collides with the bars. The title screen stays exactly as it is.
+
+**Multiplayer (B):** fully optional; offline when `CONFIG.net.defaultServer` and `?server=` are empty, but the panel still shows (Leave
+hidden). `ctx.net` = `{ mode:'offline'|'host'|'client', connected, id, name, room, isHost, players: Map<id,{id,name,pos:Vector3,yaw,pitch,
+state:{moving,sprinting,swimming,aboard,waving,torch}}>, create(name, server), join(code, name, server), leave(), send(type, payload),
+on(type, fn), chat(text) }`. Events: `net:connected` {id, room, isHost}, `net:disconnected`, `net:playerJoined` {id,name},
+`net:playerLeft` {id}, `net:chat` {id, name, text}. Protocol (JSON over WebSocket, `src/net/protocol.js` shared with the server):
+`hello{name,room?}` → `welcome{id,room,isHost,players,seed,difficulty,timeHours}`, `state{pos,yaw,pitch,state}` at `tickHz`, `snapshot{players}`
+from the server, `event{name,payload}` relayed to everyone else, `chat{text}`, `ping/pong`. The host's difficulty wins: a joiner on a
+different difficulty switches (`ctx.debug.difficulty(id)` exists) with a toast. Shared world: the host's clock is authoritative (`time:set`
+every ~10 s, soft-corrected); these events are relayed and applied remotely **without re-emitting** (loop guard): `harvest` (resources
+need a stable per-instance id: expose `ctx.resources.hideById(id)` / instance ids on the harvest payload), `structure:placed`
+(`ctx.structures.placeAt(type,x,z,yaw)`), `fire:lit`/`fire:out` (by structure id), `food:cooked`, `raft:stage`, `tree:fell`, `flare:fired`,
+`easter:found` (shared: anyone finding = everyone), `rescue:success` / `raft:sailed` (everyone wins together). Remote players render with
+`src/player/avatar.js` `createAvatar(ctx,{name,color})` → `{ object, setTarget(pos,yaw,pitch,state), update(dt), dispose() }`: a low-poly
+procedural castaway (~700 tris: torn shirt, shorts, hair, skin tone/shirt color from the id), procedural idle/walk/run/swim/wave/paddle
+animation, a canvas name tag that fades beyond 120 m, interpolated `CONFIG.net.interpolationMs` behind. Chat: Enter opens a small input
+(unlocks the pointer; Esc/Enter closes and re-locks), messages above the hotbar for 8 s; P shows the player list. `server/`: a plain Node
+`ws` server (no DB): rooms by 6-letter code, host = first player, ≤ maxPlayers, relays state/events, 20 Hz snapshots, drops idle
+sockets, `PORT` env, a `Dockerfile` + `fly.toml`, and `docs/MULTIPLAYER.md` (how to run locally with two tabs, how to deploy on Fly.io
+/ Railway, costs). The URL params `?server=&room=&name=` auto-join after the title screen.
