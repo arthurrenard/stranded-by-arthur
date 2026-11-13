@@ -165,7 +165,7 @@ test('launch route clears land and the wreck', () => {
 
 test('parts are placed per plan, spread out and in the right places', () => {
   for (const id of PLAN_IDS) {
-    const list = L.partList(RC, id);
+    const list = L.partList(RC, id).filter((p) => !L.isHutPart(p)); // v3: hut parts live on Tempest Isle
     const out = P.placeParts(W, createRng(CONFIG.seed).fork('raft'), list, {
       avoid: [{ x: site.x, z: site.z, r: 10 }, { x: LM.castawayCamp.x, z: LM.castawayCamp.z, r: 9, tag: 'camp' }],
     });
@@ -203,7 +203,7 @@ test('a crowded world (hostile colliders) still places every part', () => {
   console.warn = () => {};
   try {
     for (const id of PLAN_IDS) {
-      const list = L.partList(RC, id);
+      const list = L.partList(RC, id).filter((p) => !L.isHutPart(p)); // v3: hut parts live on Tempest Isle
       const out = P.placeParts(W, createRng(7).fork('raft'), list, {
         avoid: [{ x: site.x, z: site.z, r: 10 }, { x: LM.castawayCamp.x, z: LM.castawayCamp.z, r: 9, tag: 'camp' }],
         blocked,
@@ -214,7 +214,7 @@ test('a crowded world (hostile colliders) still places every part', () => {
       assert.equal(near.length, 1, `${id}: one plank near the spawn`);
     }
     // everything blocked: the colliders are ignored, never a soft lock
-    const all = L.partList(RC, 'motorboat');
+    const all = L.partList(RC, 'motorboat').filter((p) => !L.isHutPart(p));
     const out = P.placeParts(W, createRng(3).fork('raft'), all, { blocked: () => true });
     assert.equal(out.length, all.length);
   } finally {
@@ -225,10 +225,10 @@ test('a crowded world (hostile colliders) still places every part', () => {
 test('other seeds keep exactly one plank near the spawn', () => {
   for (const seed of [1, 2, 3, 99, 12345]) {
     for (const id of PLAN_IDS) {
-      const out = P.placeParts(W, createRng(seed).fork('raft'), L.partList(RC, id), { avoid: [{ x: site.x, z: site.z, r: 10 }] });
+      const out = P.placeParts(W, createRng(seed).fork('raft'), L.partList(RC, id).filter((p) => !L.isHutPart(p)), { avoid: [{ x: site.x, z: site.z, r: 10 }] });
       const near = out.filter((p) => p.id === 'hull_plank' && Math.hypot(p.x - LM.spawn.x, p.z - LM.spawn.z) <= 80);
       assert.equal(near.length, 1, `seed ${seed} ${id}`);
-      assert.equal(out.length, L.partList(RC, id).length);
+      assert.equal(out.length, L.partList(RC, id).filter((p) => !L.isHutPart(p)).length);
     }
   }
 });
@@ -391,6 +391,106 @@ test('easy plan: refuses work when parched, then completes', async () => {
   raft.debugComplete();
   assert.equal(raft.complete, true);
   assert.equal(raft.objective().complete, true);
+});
+
+test('v3: hut parts are listed, the boat sails to Tempest Isle, flips in a storm, sails home', async () => {
+  const { ctx } = mockCtx('medium');
+  let provider = null;
+  ctx.interact.addProvider = (fn) => (provider = fn);
+  const registered = [];
+  const reg0 = ctx.interact.register;
+  ctx.interact.register = (d) => (registered.push(d), reg0(d));
+  const weather = { s: 0, stormAt: () => weather.s };
+  ctx.weather = weather;
+  const hut = [{ id: 'compass', taken: false }];
+  ctx.isle2 = { partsInHut: () => hut };
+  const pos = new THREE.Vector3();
+  ctx.player = { position: pos, yaw: 0, teleport: (x, z) => pos.set(x, W.heightAt(x, z), z) };
+  const events = [];
+  for (const n of ['raft:sailed', 'raft:voyage', 'vehicle:capsized']) ctx.events.on(n, (p) => events.push([n, p]));
+  const raft = createRaft(ctx);
+  raft.init();
+  ctx.state = 'playing';
+  ctx.events.emit('game:start', {});
+  assert.equal(raft.planId, 'sailboat');
+  // the compass waits in the fishing hut, not on the main island
+  const hp = raft.parts().filter((p) => p.where === 'isle2hut');
+  assert.equal(hp.length, 1);
+  assert.equal(hp[0].id, 'compass');
+  assert.equal(hp[0].found, false);
+  assert.ok(Math.hypot(hp[0].position.x - LM.isle2Hut.x, hp[0].position.z - LM.isle2Hut.z) < 1);
+  assert.match(raft.objective().hint.length ? L.hintFor('compass', { where: 'isle2hut' }) : '', /Tempest Isle/);
+  hut[0].taken = true;
+  assert.equal(raft.parts().find((p) => p.where === 'isle2hut').found, true, 'taken from the hut');
+
+  raft.debugComplete();
+  const yard = registered.find((r) => r.label && r.secondary);
+  assert.equal(yard.secondary.label(), 'Sail to Tempest Isle');
+  weather.s = 0.8;
+  await yard.secondary.onUse();
+  assert.equal(raft.away, false, 'refused in a storm');
+  weather.s = 0;
+  ctx.time.hour = 8;
+  await yard.secondary.onUse();
+  assert.equal(raft.away, true);
+  assert.equal(yard.label(), `Your ${raft.plan.name} is moored at Tempest Isle`);
+  assert.ok(Math.hypot(pos.x - LM.isle2Cove.x, pos.z - LM.isle2Cove.z) < 1, 'player on the cove beach');
+  const mp = raft.voyage.position;
+  assert.ok(W.waterAt(mp.x, mp.z)?.type === 'ocean', 'moored at sea');
+  // wade out to it
+  ctx.player.teleport(mp.x + 2, mp.z);
+  const c = provider(ctx);
+  assert.equal(c.label, 'Sail home');
+  assert.equal(c.secondary.label, 'Sail back to the Boatyard');
+  // a storm flips it
+  weather.s = 1;
+  for (let i = 0; i < 20 * 240 && !raft.voyage.capsized; i++) raft.update(1 / 20);
+  assert.equal(raft.voyage.capsized, true, 'flipped by the storm');
+  assert.ok(events.some((e) => e[0] === 'vehicle:capsized'));
+  for (let i = 0; i < 40; i++) raft.update(1 / 20);
+  assert.match(provider(ctx).label, /wait for the storm/);
+  weather.s = 0.1;
+  assert.equal(provider(ctx).label, 'Right the boat (1 h)');
+  await provider(ctx).onUse();
+  assert.equal(raft.voyage.capsized, false);
+  // sail home from the isle: the normal win
+  ctx.time.hour = 10;
+  provider(ctx).onUse();
+  assert.equal(ctx.flags.cinematic, true);
+  for (let i = 0; i < 400 && !events.some((e) => e[0] === 'raft:sailed'); i++) {
+    raft.update(1 / 20);
+    await new Promise((r) => setImmediate(r));
+  }
+  const sailed = events.find((e) => e[0] === 'raft:sailed');
+  assert.ok(sailed, 'sailed home from Tempest Isle');
+  assert.equal(sailed[1].plan, 'sailboat');
+  assert.equal(raft.sailed, true);
+});
+
+test('v3: the boat sails back to the Boatyard', async () => {
+  const { ctx } = mockCtx('easy');
+  const registered = [];
+  const reg0 = ctx.interact.register;
+  ctx.interact.register = (d) => (registered.push(d), reg0(d));
+  let provider = null;
+  ctx.interact.addProvider = (fn) => (provider = fn);
+  const pos = new THREE.Vector3();
+  ctx.player = { position: pos, yaw: 0, teleport: (x, z) => pos.set(x, W.heightAt(x, z), z) };
+  const raft = createRaft(ctx);
+  raft.init();
+  ctx.state = 'playing';
+  ctx.events.emit('game:start', {});
+  raft.debugComplete();
+  const yard = registered.find((r) => r.label && r.secondary);
+  await yard.secondary.onUse();
+  assert.equal(raft.away, true);
+  const mp = raft.voyage.position;
+  ctx.player.teleport(mp.x, mp.z + 1.5);
+  ctx.time.hour = 9;
+  await provider(ctx).secondary.onUse();
+  assert.equal(raft.away, false);
+  assert.ok(Math.hypot(pos.x - raft.site.x, pos.z - raft.site.z) < 8, 'back at the Boatyard');
+  assert.match(yard.label(), /^Launch the /);
 });
 
 await Promise.all(pending);

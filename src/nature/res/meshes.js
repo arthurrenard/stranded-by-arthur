@@ -565,4 +565,51 @@ export function leafPileGeometry(rand) {
   return b.build();
 }
 
+/** v3 (Tempest Isle): wild banana plant: { plant (pseudostem + big paddle leaves, static), bunch (hanging fruit, regrows) }. */
+export function bananaPlantGeometry(rand) {
+  const plant = new GeoBuilder(rand);
+  const H = 1.95;
+  plant.add(new THREE.CylinderGeometry(0.075, 0.13, H, 7), { m: xf([0, H / 2, 0]), color: 0x6f7a3a, top: 0x8a9a44, jitter: 0.08, sway: 0.08 });
+  // old sheaths at the base
+  for (let k = 0; k < 3; k++) {
+    const a = (k / 3) * TAU + rand();
+    plant.add(new THREE.CylinderGeometry(0.02, 0.16, 0.45, 5, 1, true), { m: xf([Math.cos(a) * 0.03, 0.22, Math.sin(a) * 0.03], [0, a, 0]), color: 0x7a6a3a, jitter: 0.1 });
+  }
+  const nLeaf = 7;
+  for (let k = 0; k < nLeaf; k++) {
+    const a = (k / nLeaf) * TAU + rnd(rand, -0.25, 0.25);
+    const len = rnd(rand, 1.35, 1.8);
+    const torn = rand() < 0.3;
+    const g = bladeGeometry(torn ? 0.34 : 0.5, len, rnd(rand, 0.3, 0.5), 6, torn ? 0.1 : 0.26);
+    plant.add(g, {
+      m: xf([0, H - 0.05 - k * 0.04, 0], [rnd(rand, 0.65, 1.05), a, rnd(rand, -0.15, 0.15)]),
+      color: torn ? 0x8a8a3a : 0x3f7f2a,
+      top: torn ? 0xa89a48 : 0x78b44a,
+      jitter: 0.08,
+      sway: 0.3,
+    });
+  }
+  const bunch = new GeoBuilder(rand);
+  const bx = 0.16, by = 1.45;
+  bunch.add(new THREE.CylinderGeometry(0.018, 0.022, 0.55, 5), { m: xf([bx * 0.7, by + 0.2, 0], [0, 0, 0.35]), color: 0x6a7a34, sway: 0.08 });
+  for (let r = 0; r < 4; r++) {
+    for (let k = 0; k < 5; k++) {
+      const a = (k / 5) * TAU + r * 0.6;
+      const yy = by - r * 0.1;
+      const ripe = rand() < 0.75;
+      bunch.add(new THREE.CylinderGeometry(0.022, 0.016, 0.17, 5), {
+        m: xf([bx + Math.cos(a) * 0.07, yy, Math.sin(a) * 0.07], [Math.sin(a) * 0.9, 0, -Math.cos(a) * 0.9]),
+        color: ripe ? 0xd9c43a : 0x9fb23a,
+        top: ripe ? 0xe8d860 : 0xb8c650,
+        jitter: 0.06,
+        sway: 0.08,
+      });
+    }
+  }
+  // the purple flower bud dangling under the bunch
+  bunch.add(new THREE.ConeGeometry(0.05, 0.16, 6), { m: xf([bx, by - 0.5, 0], [Math.PI, 0, 0]), color: 0x5a2440, jitter: 0.08, sway: 0.08 });
+  bunch.add(new THREE.CylinderGeometry(0.01, 0.01, 0.12, 4), { m: xf([bx, by - 0.38, 0]), color: 0x6a7a34, sway: 0.08 });
+  return { plant: plant.build({ swayHeight: H + 0.8 }), bunch: bunch.build({ swayHeight: H + 0.8 }) };
+}
+
 export { hash3 };

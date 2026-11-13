@@ -264,7 +264,9 @@ export function createPanels(ctx, ui, host, map) {
       const pr = el('div', 'progress', body);
       el('div', '', pr).style.width = (100 * (done ? n : idx)) / Math.max(1, n) + '%';
       el('div', 'sec-title', body, `${plan.name || 'Your boat'} · ${done ? n : idx}/${n} stages built`);
-      if (done) el('div', 'muted-note', body, '⛵ The boat is finished. Launch it from the Boatyard!');
+      if (done) {
+        el('div', 'muted-note', body, R.away ? '⛵ The boat is moored off the cove on Tempest Isle: sail home from there.' : '⛵ The boat is finished. Launch it from the Boatyard, or press R there to sail it to Tempest Isle!');
+      }
       const count = (id) => ctx.inventory?.count?.(id) ?? 0;
       for (let i = 0; i < n; i++) {
         const st = stages[i] || {};
@@ -301,8 +303,24 @@ export function createPanels(ctx, ui, host, map) {
     }
 
     el('div', 'sec-title', body, 'How to');
+    tipGrid(body, HOW_TO);
+
+    // v3: Tempest Isle
+    el('div', 'sec-title', body, '🏝️ Tempest Isle');
+    const lab = ctx.difficulty?.label || ctx.difficulty?.id || 'Easy';
+    const known = map?.discovered?.has?.('isle2');
+    el('div', 'muted-note', body, known ? 'You have set foot near Tempest Isle.' : "There's another island to the north-east: from the summit you can see it clearly.");
+    tipGrid(body, [
+      ['🛶', 'Getting there', "It lies ~525 m off the north-east beach: too far to swim. Craft a Wooden Paddle (wood 2, rope 1) and a Paddle Raft (wood 8, rope 3) at the water's edge, board it (E) and paddle across (W/S paddle, A/D steer). Slow and tiring, but it gets there. Your finished boat can sail there too (R at the Boatyard)."],
+      ['🚤', 'The motorboat', "A fisherman's motorboat is tied up at the dock in the cove. Its key and a can of fuel are in the fishing hut on the summit. Drive it far out to sea (over 250 m from any coast) and press R to head for home."],
+      ['⛈️', 'Dangers', "Violent storms hit the isle on many days and nights, and they roll in fast. Hail batters you outdoors, the wind puts out every fire that isn't indoors, and rafts and sail boats can capsize (right a raft with E once the storm eases). The mountain path is steep and rocks fall."],
+      ['🎯', 'Difficulty', `Easy: the search party spots you readily. Medium: you are hard to spot, so a boat is the surer way home. Hard: the search party can't see you at all, so your only way home is a boat. You are playing ${lab}.`],
+    ]);
+  }
+
+  function tipGrid(body, rows) {
     const g = el('div', 'tip-grid', body);
-    for (const [icon, title, text] of HOW_TO) {
+    for (const [icon, title, text] of rows) {
       const d = el('div', 'tip', g);
       el('div', 'tip-icon', d, icon);
       const tx = el('div', '', d);
@@ -313,7 +331,7 @@ export function createPanels(ctx, ui, host, map) {
 
   // ── Map ────────────────────────────────────────────────────────────────
   function renderMap(titleBox) {
-    el('div', 'panel-title', titleBox, 'Island map');
+    el('div', 'panel-title', titleBox, 'Map of the islands');
     el('div', 'panel-sub', titleBox, 'Drawn from what you have seen. Explore to reveal more.');
     const body = el('div', 'panel-body map-wrap', panel);
     const stage = el('div', 'map-stage', body);
@@ -357,6 +375,23 @@ export function createPanels(ctx, ui, host, map) {
       pin.style.top = pz + '%';
       pin.title = 'Boatyard';
     }
+    // v3: your paddle raft and the boat when it is moored at Tempest Isle
+    const vr = ctx.vehicles?.raft;
+    if (vr && ctx.vehicles?.current !== vr) {
+      const [px, pz] = pct(vr.object.position.x, vr.object.position.z);
+      const pin = el('div', 'map-pin small', stage, vr.capsized ? '🙃' : '🛶');
+      pin.style.left = px + '%';
+      pin.style.top = pz + '%';
+      pin.title = vr.capsized ? 'Your raft (capsized)' : 'Your paddle raft';
+    }
+    if (ctx.raft?.away && ctx.raft.voyage?.position) {
+      const bp = ctx.raft.voyage.position;
+      const [px, pz] = pct(bp.x, bp.z);
+      const pin = el('div', 'map-pin small', stage, '⛵');
+      pin.style.left = px + '%';
+      pin.style.top = pz + '%';
+      pin.title = 'Your boat (moored)';
+    }
     const p = ctx.player?.position;
     if (p) {
       const [px, pz] = pct(p.x, p.z);
@@ -390,7 +425,7 @@ export function createPanels(ctx, ui, host, map) {
       }
     }
     const info = el('div', 'map-coords', legend);
-    info.textContent = `Explored ${Math.round(map.exploredFraction() * 100)}% of the island`;
+    info.textContent = `Explored ${Math.round(map.exploredFraction() * 100)}% of the islands`;
     if (p) {
       const yaw = ctx.player?.yaw ?? 0;
       let h = ((-yaw * 180) / Math.PI) % 360;

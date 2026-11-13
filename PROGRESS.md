@@ -51,5 +51,5 @@ hail, quick onset, raft/sailboat capsizing, wind dousing outdoor fires; the hut 
 to reach it slowly; more quirks, and a longer objective.
 - [x] Core (orchestrator): isle2 terrain grid + queries + landmarks, CONFIG.isle2/vehicles/palmDeathChance/rescueMul/flareRange,
   new items, isle2/vehicles stubs wired in main, SPEC §11 contracts + ownership
-- [ ] V3 builders (3 agents): A world+rules, B isle content, C vehicles+HUD. Check: `grep -l "// STUB" -r src`
-- [ ] Integrate + playtest, commit + push (Pages auto-deploys)
+- [x] V3 builders DONE (all 3 finished; check passes 97 files / 13 suites; vite build passes). Run wf_11148740-650, same-session resume only): A world+rules, B isle content, C vehicles+HUD. If interrupted, read docs/build-log/V3-*.md. Check: `grep -l "// STUB" -r src`
+- [ ] NEXT: browser playtest BEFORE pushing (the fog GLSL patch in src/world/fx/fogChunks.js is not yet compiled in real WebGL). Test: ?debug=1&skipintro=1, the view from launchBeach and the summit, __game.weather.debugIsle2Storm(true), crafting a paddle + paddle raft, paddling to the isle, the hut (search / hearth / burn), the dock motorboat, fishing. Then git push (Pages auto-deploys).

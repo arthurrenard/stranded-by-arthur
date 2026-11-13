@@ -14,7 +14,18 @@
 //        isStorm (bool), wind: {x, z, strength}, airTempOffset (°C), kind ('clear'|'cloudy'|'rain'|'storm'),
 //        auto (bool), rainbow 0..1, set(opts, transitionSec = 3), lightning(opts?), forecast() }
 // Events: weather:rainStart / weather:rainStop {intensity} (only while playing), weather:thunder {intensity, distance}.
+//
+// v3 — Tempest Isle LOCAL storms (fx/isle2Storm.js + CONFIG.isle2): each half-day rolls stormChance for a 1-4 h
+// storm that rolls in/out within ~stormRampSec real seconds. stormAt(x, z) = intensity x falloff(dist to the isle),
+// hailAt(x, z), rainAt(x, z), isle2Storm { active, intensity, endsAtHours }, events isle2:stormStart /
+// isle2:stormEnd, debugIsle2Storm(on). The local storm is folded into rain / cloudiness / storm / wind / airTempOffset AT THE
+// CAMERA (audio, stats, particles follow); frequent close lightning inside it, distant bolts seen from afar.
+// Hail (fx/hail.js) bounces around the camera and hurts an exposed player (not indoors / sheltered / under
+// canopy / underwater). The main island is never inside stormOuter.
 import * as THREE from 'three';
+import { CONFIG } from '../config.js';
+import { halfDayIndex, stormActiveAt, nextStorm, stormFalloff, hailFrom, rampToward } from './fx/isle2Storm.js';
+import { createHail } from './fx/hail.js';
 import { worldShared } from './fx/shared.js';
 import { createWeatherSchedule, makeWeatherTarget, airTempOffsetFor, weatherKind, WEATHER_PRESETS } from './fx/weatherModel.js';
 import { smoothstep, clamp, clamp01, damp, angleDiff } from '../core/util.js';
@@ -159,6 +170,19 @@ export function create(ctx) {
   let strikeTimer = 2.5;
   let canopy = 0, canopyTimer = 0;
   const pendingThunder = []; // [{ at, volume, intensity, distance, rate }]
+
+  // ── Tempest Isle local storm (v3) ────────────────────────────────────────
+  const I2 = ctx.world?.isle2 || ctx.world?.landmarks?.isle2 || null; // { x, z, ... }
+  const i2Seed = ((ctx.config?.seed ?? CONFIG.seed ?? 1) ^ 0x7e57) >>> 0;
+  const i2cfg = () => ctx.config?.isle2 || CONFIG.isle2 || {};
+  const isle2Storm = { active: false, intensity: 0, endsAtHours: 0 };
+  let i2Forced = null; // { on: true, until, win } | { on: false, k } (debugIsle2Storm)
+  let i2Snap = false; // time jumped: snap the intensity to its target
+  let localCam = 0; // stormAt(camera)
+  let hailCam = 0; // hailAt(camera)
+  let hailAcc = 0, hailTick = 0, hailToastAt = -99, hailExposed = false;
+  let distantTimer = 6;
+  const hail = createHail(ctx, scene);
 
   // ── Rain mesh ─────────────────────────────────────────────────────────────
   const rainGeo = new THREE.InstancedBufferGeometry();
@@ -432,6 +456,32 @@ export function create(ctx) {
     rainbow: 0,
     rainMesh,
     rainbowMesh: rainbow,
+    hailMesh: hail.mesh,
+    /** Tempest Isle storm: { active (a storm window is running), intensity 0..1 (eased), endsAtHours }. */
+    isle2Storm,
+    /** Local Tempest Isle storm intensity 0..1 at (x, z): 0 beyond CONFIG.isle2.stormOuter (never the main island). */
+    stormAt,
+    /** Hail 0..1 at (x, z) (the stronger part of a local storm). */
+    hailAt,
+    /** Rain 0..1 AT (x, z): the island-wide rain plus Tempest Isle's storm there (api.rain is at the camera). */
+    rainAt,
+    /** Island-wide rain without the local storm. */
+    baseRain: 0,
+    /** True while (pos) is inside an indoor shelter (ctx.isle2.isIndoors or a ctx.shelters entry with indoor:true). */
+    isIndoors: indoorsAt,
+    /** Is the player currently being hit by hail (exposed)? */
+    get hailExposed() {
+      return hailExposed;
+    },
+    /** Debug: force a Tempest Isle storm now (on = true, for `hours`), or clear the current one (false). */
+    debugIsle2Storm(on = true, hours = 2) {
+      const now = ctx.time?.hoursTotal ?? 0;
+      if (on) {
+        const h = Math.max(0.1, Number(hours) || 2);
+        i2Forced = { on: true, until: now + h, win: { k: halfDayIndex(now), start: now, end: now + h, peak: 1 } };
+      } else i2Forced = { on: false, k: halfDayIndex(now) };
+      return isle2Storm;
+    },
 
     /**
      * Override the weather. Fields: rain 0..1, cloudiness 0..1, wind (strength number or {x, z, strength}),
@@ -499,7 +549,14 @@ export function create(ctx) {
 
     /** Hours until the next automatic shower (0 while it rains). */
     forecast() {
-      return { kind: api.kind, nextShowerHours: model.nextShower(ctx.time?.hoursTotal ?? 0), auto: api.auto };
+      const now = ctx.time?.hoursTotal ?? 0;
+      const ns = isle2Storm.active ? null : nextStorm(i2Seed, now, i2cfg());
+      return {
+        kind: api.kind,
+        nextShowerHours: model.nextShower(now),
+        auto: api.auto,
+        isle2StormInHours: isle2Storm.active ? 0 : ns ? Math.max(0, ns.start - now) : null,
+      };
     },
 
     init() {
@@ -510,11 +567,13 @@ export function create(ctx) {
       };
       ev?.on?.('time:skip', () => {
         onJump();
+        i2Snap = true;
         rainbowCharge = 0;
         pendingThunder.length = 0;
       });
       ev?.on?.('time:set', () => {
         onJump();
+        i2Snap = true;
         pendingThunder.length = 0; // e.g. the intro cuts from the storm to a calm dawn
       });
     },
@@ -545,33 +604,148 @@ export function create(ctx) {
         if (!manual.hasAngle) cur.angle = auto.angle;
       }
 
+      updateIsle2(dt);
       publish(dt);
       events();
       thunderstorm(dt);
       visuals(dt);
+      hailHurt(dt);
     },
   };
 
+  // ── Tempest Isle storm ───────────────────────────────────────────────────
+  function stormAt(x, z) {
+    const a = isle2Storm.intensity;
+    if (!(a > 0) || !I2) return 0;
+    const c = i2cfg();
+    const outer = c.stormOuter ?? 560;
+    const dx = x - I2.x, dz = z - I2.z;
+    if (dx * dx + dz * dz >= outer * outer) return 0;
+    return a * stormFalloff(Math.sqrt(dx * dx + dz * dz), c.stormInner ?? 320, outer);
+  }
+  function hailAt(x, z) {
+    return hailFrom(stormAt(x, z));
+  }
+  function rainAt(x, z) {
+    return Math.max(api.baseRain, clamp01(stormAt(x, z) * 1.15));
+  }
+  function indoorsAt(p) {
+    if (!p) return false;
+    if (ctx.isle2?.isIndoors?.(p)) return true;
+    const S = ctx.shelters;
+    if (!S) return false;
+    for (const s of S) {
+      if (!s?.indoor || !s.position) continue;
+      const r = Number(s.radius) || 3;
+      const dx = p.x - s.position.x, dz = p.z - s.position.z;
+      if (dx * dx + dz * dz > r * r) continue;
+      const sy = Number.isFinite(s.position.y) ? s.position.y : p.y;
+      if (Math.abs((p.y ?? sy) - sy) < Math.max(4, r)) return true;
+    }
+    return false;
+  }
+
+  /** Advance the schedule (game time) and the live intensity (real-second ramps), fire the edge events. */
+  function updateIsle2(dt) {
+    const T = ctx.time;
+    const now = T?.hoursTotal ?? 0;
+    const c = i2cfg();
+    const k = halfDayIndex(now);
+    let win = null;
+    if (i2Forced?.on) {
+      if (now < i2Forced.until && now >= i2Forced.win.start - 0.01) win = i2Forced.win;
+      else i2Forced = null;
+    } else if (i2Forced && i2Forced.k !== k) i2Forced = null;
+    if (!win && !i2Forced) win = stormActiveAt(i2Seed, now, c);
+    const target = win ? win.peak : 0;
+    if (i2Snap) {
+      isle2Storm.intensity = target;
+      i2Snap = false;
+    } else {
+      const ts = Math.max(1, Number(T?.timeScale) || 1);
+      isle2Storm.intensity = rampToward(isle2Storm.intensity, target, dt * ts, c.stormRampSec ?? 30);
+    }
+    if (isle2Storm.intensity < 1e-4) isle2Storm.intensity = 0;
+    const was = isle2Storm.active;
+    isle2Storm.active = !!win;
+    if (win) isle2Storm.endsAtHours = win.end;
+    if (isle2Storm.active !== was) isle2Edge(isle2Storm.active, win);
+    const cam = camera.position;
+    localCam = stormAt(cam.x, cam.z);
+    hailCam = hailFrom(localCam);
+  }
+
+  function isle2Edge(on, win) {
+    if (on) ctx.events?.emit?.('isle2:stormStart', { intensity: win.peak, endsAtHours: win.end });
+    else ctx.events?.emit?.('isle2:stormEnd', { hours: ctx.time?.hoursTotal ?? 0 });
+    if (ctx.state !== 'playing' || !I2) return;
+    const p = ctx.player?.position || camera.position;
+    if (Math.hypot(p.x - I2.x, p.z - I2.z) > 750) return;
+    if (on)
+      ctx.ui?.toast?.('Black clouds race over Tempest Isle… A storm is rolling in fast. Get indoors, and off the water!', {
+        icon: '⛈️',
+        kind: 'warn',
+        duration: 7,
+        key: 'isle2-storm',
+      });
+    else ctx.ui?.toast?.('The storm over Tempest Isle breaks. The wind drops.', { icon: '🌤️', kind: 'info', duration: 4, key: 'isle2-storm' });
+  }
+
+  /** Hail damage while exposed (batched into ~1 hp hits so the hurt flash/sound isn't every frame). */
+  function hailHurt(dt) {
+    hailExposed = false;
+    if (ctx.state !== 'playing' || ctx.flags?.cinematic) {
+      hailAcc = 0;
+      return;
+    }
+    const p = ctx.player?.position;
+    if (!p || isle2Storm.intensity <= 0) return;
+    const h = hailAt(p.x, p.z);
+    if (h <= 0) return;
+    const under = !!ctx.water?.underwater || !!ctx.player?.headUnderwater;
+    if (under || ctx.flags?.sheltered || canopy >= 0.6 || indoorsAt(p)) return;
+    hailExposed = true;
+    hailAcc += dt * (i2cfg().hailDamagePerSec ?? 0.45) * h * (Number(ctx.difficulty?.damageMul) || 1);
+    hailTick += dt;
+    if (hailAcc >= 1.2 || (hailTick >= 2.5 && hailAcc > 0.05)) {
+      ctx.stats?.damage?.(hailAcc, 'hail');
+      hailAcc = 0;
+      hailTick = 0;
+    }
+    if (fxClock - hailToastAt > 25) {
+      hailToastAt = fxClock;
+      ctx.ui?.toast?.('Hail! Get indoors!', { icon: '🧊', kind: 'warn', duration: 3.5, key: 'hail' });
+    }
+  }
+
   /** Copy the live values into the API + shared uniforms (gusts, temperature, label). */
   function publish(dt) {
-    const rain = cur.rain < 0.002 ? 0 : clamp01(cur.rain);
-    const storm = cur.storm < 0.01 ? 0 : clamp01(cur.storm);
-    const cloud = clamp01(cur.cloud);
+    let rain = cur.rain < 0.002 ? 0 : clamp01(cur.rain);
+    let storm = cur.storm < 0.01 ? 0 : clamp01(cur.storm);
+    let cloud = clamp01(cur.cloud);
+    api.baseRain = rain; // the island-wide rain, without the local storm (see rainAt)
+    // v3: Tempest Isle's local storm, folded in at the camera
+    const ls = localCam;
+    if (ls > 0) {
+      rain = Math.max(rain, clamp01(ls * 1.15));
+      storm = Math.max(storm, ls);
+      cloud = Math.max(cloud, clamp01(0.35 + ls));
+    }
     api.rain = rain;
     api.storm = storm;
     api.isStorm = storm > 0.5;
     api.cloudiness = cloud;
-    api.airTempOffset = airTempOffsetFor(cloud, rain, storm);
+    api.airTempOffset = airTempOffsetFor(cloud, rain, storm) - 2.5 * hailCam;
     api.kind = weatherKind(cloud, rain, storm);
     // gusts: a few incommensurate sines in real time, stronger in storms
     const c = fxClock;
     const g = 0.5 * Math.sin(c * 0.37 + 1.1) + 0.3 * Math.sin(c * 0.93 + 0.3) + 0.2 * Math.sin(c * 2.1 + 2.2);
     const gust = Math.max(0, g) * (0.22 + 0.2 * storm);
-    const turb = (0.05 + 0.22 * storm) * Math.sin(c * 0.53 + 0.7) + 0.08 * storm * Math.sin(c * 1.7);
+    const turb = (0.05 + 0.22 * storm) * Math.sin(c * 0.53 + 0.7) + 0.08 * storm * Math.sin(c * 1.7) + 0.25 * ls * Math.sin(c * 1.13 + 0.4);
     const ang = cur.angle + turb;
     api.wind.x = Math.cos(ang);
     api.wind.z = Math.sin(ang);
-    api.wind.strength = Math.min(1.6, cur.wind * (1 + gust));
+    api.wind.strength = Math.min(1.6, Math.max(cur.wind * (1 + gust), ls * (1.2 + 0.3 * Math.max(0, g))));
     const u = ctx.uniforms;
     if (u) {
       u.uWind?.value?.set?.(api.wind.x, api.wind.z);
@@ -601,10 +775,26 @@ export function create(ctx) {
     if (api.storm > 0.55) {
       strikeTimer -= dt;
       if (strikeTimer <= 0) {
-        api.lightning();
-        strikeTimer = rng.range(4, 14) * (1.6 - 0.6 * api.storm);
+        // inside Tempest Isle's storm: closer and much more frequent
+        api.lightning(localCam > 0.3 ? { distance: rng.range(140, 1000) } : undefined);
+        strikeTimer = rng.range(4, 14) * (1.6 - 0.6 * api.storm) * (1 - 0.6 * localCam);
       }
     } else strikeTimer = 2.5;
+    // seen from afar (the main island's summit or beaches): silent-ish bolts over Tempest Isle, faint rumbles
+    if (I2 && isle2Storm.intensity > 0.5 && localCam < 0.05 && !ctx.water?.underwater) {
+      distantTimer -= dt;
+      if (distantTimer <= 0) {
+        distantTimer = rng.range(5, 13);
+        const cam = camera.position;
+        const a = rng() * Math.PI * 2, r = rng() * 170;
+        const x = I2.x + Math.cos(a) * r, z = I2.z + Math.sin(a) * r;
+        const dd = Math.hypot(x - cam.x, z - cam.z);
+        if (dd < 2300) {
+          buildBolt(x, Math.max(0, ctx.world?.heightAt?.(x, z) ?? 0), z);
+          pendingThunder.push({ at: fxClock + dd / 343, volume: clamp(0.75 - dd / 2600, 0.1, 0.45), rate: 0.7, intensity: 0.25, distance: dd });
+        }
+      }
+    } else distantTimer = Math.min(distantTimer, 4);
     for (let i = pendingThunder.length - 1; i >= 0; i--) {
       const p = pendingThunder[i];
       if (fxClock < p.at) continue;
@@ -650,6 +840,11 @@ export function create(ctx) {
       ru.uColor.value.g += fl;
       ru.uColor.value.b += fl * 1.1;
     } else if (rainTime > 600) rainTime = 0; // keep the GPU clock small (invisible while dry)
+
+    // hail pellets mixed into the rain (Tempest Isle storms), not indoors / underwater
+    let hailAmt = 0;
+    if (hailCam > 0 && !under && !indoorsAt(cam)) hailAmt = hailCam * (1 - 0.65 * canopy);
+    hail.update(dt, hailAmt, api.wind);
 
     // lightning bolt
     if (boltAge < 1) {

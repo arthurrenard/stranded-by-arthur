@@ -490,8 +490,12 @@ body.debug .hud-stats {
   min-width: 22px;
   height: 22px;
   padding: 0 6px;
-  font-size: 12px;
-  font-weight: 800;
+  /* v3: normal weight so the letter reads clearly (a heavy weight blurred [E] into a blob) */
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0;
   border-radius: 6px;
   color: #1b1a16;
   background: linear-gradient(180deg, #fff6e2, #e9d6ae);
@@ -1405,14 +1409,25 @@ body.letterbox .hud-subtitle {
   font-weight: 700;
   color: var(--hud-good);
 }
-.hud-rescue {
+/* v3: rescue + storm banners stack under the compass */
+.hud-banners {
   position: absolute;
   top: 80px;
   left: 50%;
-  width: 360px;
-  max-width: 80vw;
-  padding: 9px 14px 10px;
   transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  pointer-events: none;
+}
+.hud-rescue {
+  position: relative;
+  width: 360px;
+  max-width: 100%;
+  padding: 9px 14px 10px;
   text-align: center;
   display: none;
   border-color: rgba(255, 107, 94, 0.55);
@@ -1562,4 +1577,64 @@ body.letterbox .hud-subtitle {
 }
 #hud.hud-cine .hud-game {
   opacity: 0;
+}
+
+/* ── v3: Tempest Isle storm banner + vehicle panel ─────────────────────── */
+.hud-storm {
+  display: none;
+  width: 380px;
+  max-width: 100%;
+  padding: 8px 14px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  border-color: rgba(150, 170, 255, 0.55);
+  background: rgba(18, 22, 40, 0.74);
+  animation: hud-storm-flash 2.4s ease-in-out infinite;
+}
+.hud-storm.show {
+  display: block;
+}
+@keyframes hud-storm-flash {
+  0%,
+  86%,
+  100% {
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+  }
+  90% {
+    box-shadow: 0 0 26px rgba(200, 215, 255, 0.75);
+  }
+}
+.hud-vehicle {
+  position: absolute;
+  left: 50%;
+  bottom: 104px;
+  transform: translateX(-50%);
+  display: none;
+  max-width: min(620px, calc(100vw - 32px));
+  padding: 7px 14px 8px;
+  text-align: center;
+}
+.hud-vehicle.show {
+  display: block;
+}
+.veh-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.veh-sub {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--ink-dim);
+}
+@media (max-width: 900px) {
+  .hud-vehicle {
+    bottom: 92px;
+  }
+  .veh-title {
+    white-space: normal;
+  }
 }

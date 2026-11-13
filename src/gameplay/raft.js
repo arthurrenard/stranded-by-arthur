@@ -8,12 +8,16 @@
 // Events in:  game:start (resolve the plan from ctx.difficulty, spawn everything), difficulty:set, item:added/removed,
 //             input:unlock (skips the launch cinematic).
 // Flags:      ctx.flags.cinematic during the build fade (restored) and the launch (kept: the game is over).
+// v3 (V3-C): 'isle2hut' parts (CONFIG.raft.parts.*.where) are not scattered here: they wait in Tempest Isle's fishing
+// hut (ctx.isle2 gives them) and parts() lists them with where 'isle2hut' (found = taken). The finished boat can also
+// sail to Tempest Isle and back ([R] at the Boatyard, see vehicle-voyage.js); sailing home from there is the same win.
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { ITEMS } from '../core/items.js';
 import * as L from './raft-logic.js';
 import { placeParts, findSite, findLaunchTurn, buildPath, pathAt } from './raft-parts.js';
 import * as M from './raft-meshes.js';
+import { createVoyage } from './vehicle-voyage.js';
 
 const TAU = Math.PI * 2;
 const STEP = 0.5;
@@ -50,6 +54,20 @@ export function create(ctx) {
   let action = null;
   let cine = null;
   let clock = 0;
+  const hutViews = []; // v3: parts kept in the fishing hut on Tempest Isle
+  const hullCols = []; // v3: the hull colliders at the yard (lifted while the boat is away)
+  const voyage = createVoyage(ctx, {
+    boat: () => boat,
+    planId: () => planId,
+    planName: () => plan?.name || 'boat',
+    speed: () => SPEED[planId] || 10,
+    site,
+    siteInfo: () => siteInfo,
+    fadeTo: (to, s) => fadeTo(to, s),
+    hideYardBoat,
+    showYardBoat,
+    onSailed: emitSailed,
+  });
 
   // ── plan + objective ─────────────────────────────────────────────────────
   const curPlanId = () => (started ? planId : L.planIdFor(ctx.difficulty, RC));
@@ -158,8 +176,11 @@ export function create(ctx) {
     const def = () => ({
       label: yardLabel,
       onUse: yardUse,
-      enabled: () => started && !busy && !cine && !sailed,
-      secondary: { label: 'Check the plan', onUse: showPlan },
+      enabled: () => started && !busy && !cine && !sailed && !voyage.active,
+      secondary: {
+        label: () => (voyage.away ? '' : complete ? 'Sail to Tempest Isle' : 'Check the plan'),
+        onUse: () => (voyage.away ? null : complete ? voyage.sailToIsle() : showPlan()),
+      },
     });
     const h1 = ctx.interact?.register?.({ ...def(), position: new THREE.Vector3(site.x, site.y + 1.0, site.z), radius: 5, priority: 0.4 });
     const h2 = ctx.interact?.register?.({ ...def(), position: new THREE.Vector3(sx, sy + 1.45, sz), radius: 3, priority: 0 });
@@ -197,7 +218,10 @@ export function create(ctx) {
         const lz = -sp.length / 2 + r + ((sp.length - 2 * r) * k) / (n - 1);
         const p = yardPoint(0, lz);
         const c = ctx.colliders.add({ x: p.x, z: p.z, r, y0: site.y - 0.5, y1: site.y + sp.cradle + sp.depth, tag: 'boat', data: { owner: 'raft' } });
-        if (c) boatColliders.push(c);
+        if (c) {
+          boatColliders.push(c);
+          hullCols.push(c);
+        }
       }
     }
   }
@@ -205,7 +229,14 @@ export function create(ctx) {
   function spawnParts() {
     const W = ctx.world, LM = W.landmarks;
     const rng = ctx.rng.fork('raft');
-    const list = L.partList(RC, planId);
+    const all = L.partList(RC, planId);
+    const list = all.filter((p) => !L.isHutPart(p));
+    const hut = LM.isle2Hut || LM.isle2 || { x: 0, z: 0 };
+    for (const p of all) {
+      if (!L.isHutPart(p)) continue;
+      const v = { id: p.id, where: 'isle2hut', found: false, position: new THREE.Vector3(hut.x, hut.y ?? 0, hut.z) };
+      hutViews.push(v);
+    }
     const avoid = [
       { x: site.x, z: site.z, r: 10 },
       { x: LM.spawn.x, z: LM.spawn.z, r: 5 },
@@ -221,6 +252,56 @@ export function create(ctx) {
     const placed = placeParts(W, rng, list, { avoid, blocked });
     const rand = ctx.rng.fork('raft-parts-mesh');
     for (const e of placed) addRecord(e, rand);
+    for (const v of hutViews) partsView.push(v);
+  }
+
+  /** v3: hut parts are found once taken from the hut (ctx.isle2.partsInHut() or a raft:part event). */
+  function refreshHut() {
+    if (!hutViews.length) return;
+    let list = null;
+    try {
+      list = ctx.isle2?.partsInHut?.();
+    } catch (e) {
+      list = null;
+    }
+    if (!Array.isArray(list)) return;
+    const seen = {};
+    for (const v of hutViews) {
+      const k = (seen[v.id] = (seen[v.id] ?? -1) + 1);
+      let n = -1;
+      for (const e of list) {
+        if (e?.id !== v.id || ++n !== k) continue;
+        if (e.taken) v.found = true;
+        break;
+      }
+    }
+  }
+  function onPart(p) {
+    if (p?.where !== 'isle2hut') return;
+    const v = hutViews.find((h) => h.id === p.id && !h.found);
+    if (v) v.found = true;
+    foundIds.add(p.id);
+    dirty = true;
+  }
+
+  /** v3: the boat sails to Tempest Isle: lift its yard colliders (the group is moved by the voyage). */
+  function hideYardBoat() {
+    for (const c of hullCols) {
+      ctx.colliders?.remove?.(c);
+      const i = boatColliders.indexOf(c);
+      if (i >= 0) boatColliders.splice(i, 1);
+    }
+    hullCols.length = 0;
+    hullColliders = false;
+    dirty = true;
+  }
+  /** v3: back on its cradle at the Boatyard. */
+  function showYardBoat() {
+    if (!boat) return;
+    boat.group.position.set(site.x, site.y + boat.spec.cradle, site.z);
+    boat.group.rotation.set(0, siteInfo.yaw, 0);
+    refreshBoat();
+    dirty = true;
   }
 
   function addRecord(e, rand) {
@@ -350,12 +431,17 @@ export function create(ctx) {
   // ── the Boatyard interaction ─────────────────────────────────────────────
   function yardLabel() {
     if (!started) return '';
+    if (voyage.away) return `Your ${plan.name} is moored at Tempest Isle`;
     if (complete) return L.isWorkHour(ctx.time.hour) ? `Launch the ${plan.name} and sail home` : 'Too dark to sail: wait for dawn';
     const st = plan.stages[stageIndex];
     return objective().ready ? `Build: ${st.label} (${L.fmtHours(st.hours)})` : 'What’s needed?';
   }
   function yardUse() {
-    if (!started || busy || cine || sailed) return;
+    if (!started || busy || cine || sailed || voyage.active) return;
+    if (voyage.away) {
+      toast(`Your ${plan.name} is moored off the cove on Tempest Isle. Sail it home from there, or back here.`, { icon: '⛵', kind: 'info', key: 'raft-away' });
+      return;
+    }
     if (complete) return tryLaunch();
     if (objective().ready) return build();
     showNeeds();
@@ -441,12 +527,16 @@ export function create(ctx) {
   function onComplete() {
     dirty = true;
     play('chime');
-    toast(`The ${plan.name} is finished! Launch it from the Boatyard (05:00–20:00) and sail home.`, { icon: '⛵', kind: 'story', duration: 8 });
+    toast(`The ${plan.name} is finished! Launch it from the Boatyard (05:00–20:00) and sail home, or press R there to sail it to Tempest Isle.`, {
+      icon: '⛵',
+      kind: 'story',
+      duration: 8,
+    });
     ev.emit('raft:complete', { plan: planId });
   }
 
   function tryLaunch() {
-    if (!complete || cine || sailed || ctx.stats?.dead) return;
+    if (!complete || cine || sailed || voyage.away || voyage.active || ctx.stats?.dead) return;
     if (!L.isWorkHour(ctx.time.hour)) {
       toast('Too dark to sail: wait for dawn (05:00)', { icon: '🌙', kind: 'warn', key: 'raft-night' });
       return;
@@ -571,6 +661,13 @@ export function create(ctx) {
     // flags.cinematic stays on: the game is over (state 'rescued'), the win screen covers the HUD
     ev.emit('raft:sailed', { plan: planId, name: plan.name, day: ctx.time.day });
   }
+  /** v3: the same win after sailing home from Tempest Isle (vehicle-voyage.js cinematic). */
+  function emitSailed() {
+    if (ctx.state !== 'playing' || sailed) return;
+    sailed = true;
+    dirty = true;
+    ev.emit('raft:sailed', { plan: planId, name: plan.name, day: ctx.time.day });
+  }
 
   // ── debug ────────────────────────────────────────────────────────────────
   function debugGiveAll() {
@@ -616,9 +713,17 @@ export function create(ctx) {
     get building() {
       return busy;
     },
+    /** v3: the finished boat is moored at Tempest Isle. */
+    get away() {
+      return voyage.away;
+    },
+    voyage,
     site,
     objective,
-    parts: () => partsView,
+    parts: () => {
+      refreshHut();
+      return partsView;
+    },
     debugGiveAll,
     debugComplete,
     debugLaunch,
@@ -635,6 +740,8 @@ export function create(ctx) {
       ev.on('difficulty:set', markDirty);
       ev.on('item:added', markDirty);
       ev.on('item:removed', markDirty);
+      ev.on('raft:part', onPart);
+      voyage.init();
       ev.on('input:unlock', () => {
         if (cine && cine.t > 0.3) beginFade(0.8);
       });
@@ -657,6 +764,7 @@ export function create(ctx) {
       puffs?.update(dt);
       if (action) updateAction(dt);
       if (cine) updateCine(dt);
+      voyage.update(dt);
     },
   };
   return api;

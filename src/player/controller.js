@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import * as M from '../survival/model.js';
+import { currentsAt } from '../gameplay/vehicle-logic.js';
 
 const DEG = Math.PI / 180;
 const PITCH_LIMIT = 85 * DEG;
@@ -84,6 +85,10 @@ export function create(ctx) {
   let swimHinted = false;
   let wasSinking = false; // v2: exhausted-sinking last frame (gentle float-up after recovering at depth)
   let wasControlling = false;
+  // v3: seated aboard a vehicle (vehicles.js provides the seat Object3D at eye height)
+  let seat = null;
+  let seatRoll = 0;
+  const cur = {}; // currentsAt() output, reused
   // death fall
   let deathInit = false;
   let deathT = 0;
@@ -108,6 +113,61 @@ export function create(ctx) {
     sliding: false,
     /** When false the controller ignores input (physics and camera still run). */
     enabled: true,
+    /** v3: the vehicle record while seated aboard (ctx.vehicles.current), else null. */
+    aboard: null,
+
+    /**
+     * v3: sit on a vehicle. `seatObj` is an Object3D placed at eye height on the deck (it carries the
+     * vehicle's bob and roll); `vehicle` becomes api.aboard. setSeat(null) stands up again (the caller then
+     * teleports the player onto land or into the water). While seated there is no walking/swimming
+     * physics, gravity, currents or footsteps; the mouse still looks around.
+     */
+    setSeat(seatObj, vehicle = null) {
+      if (seatObj) {
+        seat = seatObj;
+        api.aboard = vehicle || api.aboard || { type: 'vehicle' };
+        if (api.swimming) {
+          api.swimming = false;
+          ctx.events.emit('player:swimEnd', { type: lastWaterType });
+        }
+        if (api.inWater) {
+          api.inWater = false;
+          ctx.events.emit('player:exitWater', { type: lastWaterType });
+        }
+        if (api.headUnderwater) {
+          api.headUnderwater = false;
+          ctx.events.emit('player:surfaced', { type: lastWaterType });
+        }
+        api.diving = false;
+        api.depth = 0;
+        api.waterInfo = null;
+        api.moving = api.sprinting = api.sliding = false;
+        api.onGround = true;
+        velocity.set(0, 0, 0);
+        wasSinking = false;
+        stepSmooth = dip = dipVel = 0;
+        bobWeight = 0;
+        api.syncSeat(0);
+      } else {
+        seat = null;
+        api.aboard = null;
+        seatRoll = 0;
+      }
+    },
+    /** v3: copy the seat transform into the feet position + camera (vehicles call it after moving). */
+    syncSeat(dt = 0) {
+      if (!seat || ctx.state !== 'playing' || ctx.flags.cinematic) return;
+      seat.updateWorldMatrix(true, false);
+      eye.setFromMatrixPosition(seat.matrixWorld);
+      const eyeH = api.aboard?.seatEye ?? 1.05;
+      position.set(eye.x, eye.y - eyeH, eye.z);
+      const r = api.aboard?.roll ?? 0;
+      seatRoll = dt > 0 ? damp(seatRoll, r, 10, dt) : r;
+      const cam = ctx.camera;
+      cam.position.copy(eye);
+      const breathe = Math.sin(t * 1.5) * 0.0022;
+      cam.rotation.set(clamp(api.pitch + breathe + (api.aboard?.pitch ?? 0), -PITCH_LIMIT, PITCH_LIMIT), api.yaw, seatRoll, 'YXZ');
+    },
 
     init() {
       const L = ctx.world?.landmarks?.spawn;
@@ -116,6 +176,7 @@ export function create(ctx) {
 
     /** Place the feet on the ground (or a rock top) at x,z. yaw optional (pitch resets when given). */
     teleport(x, z, yaw) {
+      if (seat) api.setSeat(null); // v3: teleporting always stands you up (vehicles notice aboard === null)
       position.set(x, 0, z);
       const g = ctx.world.heightAt(x, z);
       position.y = g;
@@ -174,6 +235,14 @@ export function create(ctx) {
       t += dt;
       const controllable = api.enabled && !ctx.flags.sleeping && !ctx.stats?.dead;
       if (controllable) look();
+      if (seat) {
+        // aboard: the vehicle moves the seat; no physics, gravity, currents or footsteps here
+        restoreFov();
+        api.moving = api.sprinting = api.sliding = false;
+        wasControlling = controllable;
+        api.syncSeat(dt);
+        return;
+      }
       // Ignore a jump pressed in the same frame control was (re)gained (e.g. "Space to skip" the intro).
       step(dt, controllable && wasControlling);
       wasControlling = controllable;
@@ -503,16 +572,18 @@ export function create(ctx) {
   }
 
   function applyBoundary(dt) {
-    const B = CONFIG.world.boundary;
-    const r = Math.hypot(position.x, position.z);
-    const soft = B - BOUNDARY_SOFT;
-    if (r > soft && r > 1e-3) {
-      const over = (r - soft) / BOUNDARY_SOFT; // 0 at the start of the currents, 1 at the hard limit
-      const nx = position.x / r,
-        nz = position.z / r;
-      velocity.x -= nx * CURRENT_ACCEL * over * dt;
-      velocity.z -= nz * CURRENT_ACCEL * over * dt;
-      if (r > B) {
+    // v3: currents only far from both islands (vehicle-logic.currentsAt); between the islands they are
+    // capped and never snap the swimmer back, so a capsized crossing doesn't teleport anyone.
+    const isle = ctx.world?.isle2 || null;
+    currentsAt(position.x, position.z, CONFIG.world.boundary, BOUNDARY_SOFT, isle, CONFIG.world.islandRadius ?? 320, cur);
+    if (cur.active) {
+      velocity.x += cur.dirX * CURRENT_ACCEL * cur.over * dt;
+      velocity.z += cur.dirZ * CURRENT_ACCEL * cur.over * dt;
+      const B = cur.clampR;
+      const r = Math.hypot(position.x, position.z);
+      if (B > 0 && r > B) {
+        const nx = position.x / r,
+          nz = position.z / r;
         position.x = nx * B;
         position.z = nz * B;
         const out = velocity.x * nx + velocity.z * nz;
@@ -521,11 +592,14 @@ export function create(ctx) {
           velocity.z -= nz * out;
         }
       }
-      if (!boundaryWarned && over > 0.12) {
+      if (!boundaryWarned && cur.over > 0.12) {
         boundaryWarned = true;
-        ctx.ui?.toast?.('Strong currents push you back toward the island.', { icon: '🌊', kind: 'warn' });
+        ctx.ui?.toast?.(
+          B > 0 ? 'Strong currents push you back toward the island.' : 'The currents tug you toward the nearest island.',
+          { icon: '🌊', kind: 'warn' }
+        );
       }
-    } else if (r < soft - 40) boundaryWarned = false;
+    } else if (Math.hypot(position.x, position.z) < CONFIG.world.boundary - BOUNDARY_SOFT - 40) boundaryWarned = false;
   }
 
   // ── Footsteps + head bob phase ───────────────────────────────────────────

@@ -19,6 +19,10 @@
 //   kinds, regrowAll(), init(), update(dt) }
 // v2: stones hide pyrite (15 %), berry bushes / nettles also give leaves, many more leafy shrubs near the spawn, and
 //   the trees themselves can be harvested (apples, chestnuts, palm shake, birch / willow leaves: res/treeHarvest.js).
+// v3 (V3-B): Tempest Isle resources (placeIsle2, placed last with their own rng fork so the main island's layout never
+//   shifts): sticks, stones, flint, pyrite, leafy shrubs, wild banana plants by the Rain Pool (bunches regrow ~1 day),
+//   aloe + yarrow, cattails at the Rain Pool, driftwood + coconuts in the cove. spawnItem(id, x, z, n, { keep, onPick })
+//   (keep: never evicted by the 80-drop cap; onPick(n) after each pickup).
 import * as THREE from 'three';
 import { ITEMS } from '../core/items.js';
 import { clamp01, smoothstep, lerp } from '../core/util.js';
@@ -66,6 +70,7 @@ const KINDS = {
   aloe: { item: 'aloe', n: [1, 1], label: 'Cut an Aloe Leaf', plant: true, regrow: [24, 48], view: 85, iy: 0.2, space: 1.2, scale: [0.95, 1.3], burst: 0x9ab48a, parts: [['aloe', 'solid', 'sprout']] },
   yarrow: { item: 'yarrow', n: [1, 1], label: 'Pick Yarrow', plant: true, regrow: [24, 48], view: 85, iy: 0.35, space: 1.0, scale: [0.95, 1.25], burst: 0xf6f3e8, parts: [['yarrow', 'foliage', 'sprout']] },
   chamomile: { item: 'chamomile', n: [1, 2], label: 'Pick Chamomile', plant: true, regrow: [24, 48], view: 75, iy: 0.16, space: 0.9, scale: [1.0, 1.3], burst: 0xf2c11e, parts: [['chamomile', 'foliage', 'sprout']] },
+  banana: { item: 'banana', n: [2, 3], label: 'Pick Bananas', plant: true, regrow: [20, 28], view: 140, iy: 1.45, radius: 3.4, space: 2.6, scale: [0.9, 1.15], burst: 0xe0cc48, parts: [['bananaPlant.plant', 'foliage', 'static', true], ['bananaPlant.bunch', 'glossy', 'growth']] },
   driftwood: { item: 'wood', n: [2, 2], label: 'Gather Driftwood', regrow: [24, 48], view: 95, iy: 0.12, align: true, space: 1.4, scale: [0.9, 1.3], burst: 0xcfc4b0, parts: [['driftwoodPiece', 'solid', 'respawn']] },
   // ── decor (not interactive) ──
   log: { decor: true, view: 170, align: true, space: 3.2, scale: [0.8, 1.3], parts: [['driftLog', 'solid', 'static', true]] },
@@ -96,6 +101,7 @@ const GEOS = {
   yarrow: M.yarrowGeometry,
   chamomile: M.chamomileGeometry,
   driftwoodPiece: M.driftwoodPieceGeometry,
+  bananaPlant: M.bananaPlantGeometry,
   driftLog: M.driftLogGeometry,
   shell: M.shellGeometry,
   boulder: M.boulderGeometry,
@@ -538,12 +544,12 @@ export function create(ctx) {
   }
 
   // ── Dropped items (spawnItem) ──────────────────────────────────────────
-  function spawnItem(id, x, z, n = 1) {
+  function spawnItem(id, x, z, n = 1, opts = null) {
     if (!ITEMS[id] || !Number.isFinite(x) || !Number.isFinite(z)) return null;
     n = Math.max(1, Math.floor(n));
     if (!built) {
-      pendingDrops.push([id, x, z, n]);
-      return null;
+      pendingDrops.push([id, x, z, n, opts]);
+      return { id, n, pending: true };
     }
     const [gk, mk] = DROP_LOOK[id] ?? ['bundle', 'solid'];
     const mesh = new THREE_.Mesh(geometry(gk), mats[mk]);
@@ -559,7 +565,7 @@ export function create(ctx) {
     mesh.receiveShadow = true;
     mesh.name = 'res-drop-' + id;
     group.add(mesh);
-    const drop = { id, n, mesh, floating, x, z, y, t: rand() * 10, handle: null, removed: false };
+    const drop = { id, n, mesh, floating, x, z, y, t: rand() * 10, handle: null, removed: false, keep: !!opts?.keep, onPick: opts?.onPick || null };
     drop.remove = () => removeDrop(drop);
     if (ctx.interact?.register) {
       drop.handle = ctx.interact.register({
@@ -571,7 +577,10 @@ export function create(ctx) {
       });
     }
     drops.push(drop);
-    if (drops.length > 80) removeDrop(drops[0]);
+    if (drops.length > 80) {
+      const old = drops.find((d) => !d.keep); // kept drops (the hut's key, compass…) are never evicted
+      if (old) removeDrop(old);
+    }
     return drop;
   }
   function removeDrop(drop) {
@@ -594,6 +603,11 @@ export function create(ctx) {
     ctx.ui?.toast?.(`+${added} ${itemName(drop.id)}`, { icon: ITEMS[drop.id]?.icon, kind: 'good', duration: 2 });
     burst(drop.x, drop.mesh.position.y + 0.1, drop.z, 0xe8d6a8, 8);
     drop.n -= added;
+    try {
+      drop.onPick?.(added);
+    } catch (e) {
+      console.error('[resources] onPick', e);
+    }
     if (drop.n <= 0) removeDrop(drop);
   }
   function updateDrops(dt) {
@@ -611,8 +625,9 @@ export function create(ctx) {
     const L = W.landmarks;
     const S = L.spawn;
     const placer = new Placer(W, { colliders: ctx.colliders });
-    const trees = Array.isArray(ctx.flora?.trees) ? ctx.flora.trees : [];
-    placer.addTrees(trees);
+    const allTrees = Array.isArray(ctx.flora?.trees) ? ctx.flora.trees : [];
+    placer.addTrees(allTrees);
+    const trees = allTrees.filter((t) => t.island !== 'isle2'); // main-island logic below (v3: Tempest Isle has its own pass)
     // Story props owned by Builder F: keep their spots clear.
     placer.reserve(S.x, S.z, 3);
     for (const [name, r] of [['crate1', 4], ['crate2', 4], ['castawayCamp', 10], ['bottleBeach', 3], ['carvedTree', 2.5]]) {
@@ -740,6 +755,71 @@ export function create(ctx) {
     const leafy = (x, z, b) => b.sand < 0.3 && b.slope < 0.35 && b.rock < 0.35 && (b.forest > 0.1 || b.meadow > 0.25);
     put('shrub', placer.around(rand, S.x, S.z, 16, 150, 30, sp('shrub'), leafy));
     put('shrub', placer.scatter(rand, 70, sp('shrub'), (x, z, b) => b.forest > 0.2 && b.slope < 0.4 && b.sand < 0.25 && b.rock < 0.3));
+
+    // 8. v3: Tempest Isle (last, with its own rng fork for sampling).
+    try {
+      placeIsle2(placer, allTrees);
+    } catch (e) {
+      console.error('[resources] Tempest Isle placement failed', e);
+    }
+  }
+
+  /** v3: Tempest Isle resources. Sampling uses its own fork; addInstance's per-instance looks come last in `rand`. */
+  function placeIsle2(placer, allTrees) {
+    const I = W.isle2;
+    const L = W.landmarks;
+    if (!I || !L.isle2Hut) return;
+    const r2 = ctx.rng.fork('resources-isle2');
+    const D = L.isle2Dock;
+    // keep the hut plateau, the dock (+ the moored boat) and the landing spot clear
+    placer.reserve(L.isle2Hut.x, L.isle2Hut.z, (L.isle2Hut.r ?? 9) + 3);
+    if (D) for (let t = -3; t <= (D.length ?? 18) + 2; t += 2) placer.reserve(D.x + D.dirX * t, D.z + D.dirZ * t, t > 8 ? 4.2 : 2.4);
+    if (L.isle2Cove) placer.reserve(L.isle2Cove.x, L.isle2Cove.z, 3.5);
+    const put = (key, pts) => pts.forEach((p) => addInstance(key, p));
+    const sp = (key) => KINDS[key].space;
+    /** count points on Tempest Isle passing filter(x, z, b). */
+    const on = (count, space, filter, tries = count * 60) => {
+      const out = [];
+      for (let t = 0; t < tries && out.length < count; t++) {
+        const q = W.randomLandPoint(r2, null, 20, 'isle2');
+        if (!q) continue;
+        const p = placer.tryAt(q.x, q.z, space, filter);
+        if (p) out.push(p);
+      }
+      return out;
+    };
+    const cove = (x, z, b) => b.sand > 0.55 && b.h > 0.4 && b.h < 3 && b.slope < 0.3;
+    const ground = (x, z, b) => b.sand < 0.3 && b.slope < 0.4 && b.h > 1;
+    put('flint', on(3, sp('flint'), cove));
+    put('pyrite', on(2, sp('pyrite'), (x, z, b) => b.h > 30 && b.slope < 0.6 && b.sand < 0.1));
+    put('stone', on(16, sp('stone'), cove));
+    put('stone', on(16, sp('stone'), (x, z, b) => b.sand < 0.2 && b.slope < 0.55 && b.h > 3));
+    put('stick', on(40, sp('stick'), (x, z, b) => ground(x, z, b) && placer.nearestTree(x, z, 7, (t) => t.island === 'isle2') !== null));
+    put('shrub', on(28, sp('shrub'), (x, z, b) => ground(x, z, b) && b.slope < 0.35));
+    put('aloe', on(5, sp('aloe'), (x, z, b) => b.sand > 0.25 && b.sand < 0.95 && b.h > 1 && b.h < 6 && b.slope < 0.3));
+    put('yarrow', on(6, sp('yarrow'), (x, z, b) => ground(x, z, b) && b.slope < 0.3 && b.h < 40));
+    put('driftwood', on(10, sp('driftwood'), cove));
+    put('log', on(4, sp('log'), cove));
+    put('shell', on(40, sp('shell'), (x, z, b) => b.sand > 0.6 && b.h > 0.12 && b.h < 1.1, 40 * 60));
+    // the Rain Pool: banana plants around it, cattails on its rim
+    const P = L.isle2Pond;
+    if (P) {
+      put('banana', placer.around(r2, P.x, P.z, (P.r ?? 6) + 2.5, (P.r ?? 6) + 18, 8, sp('banana'), (x, z, b) => b.sand < 0.35 && b.slope < 0.32));
+      let nCat = 0;
+      for (const e of waterEdgePoints(W, r2)) {
+        if (e.waterId !== 'isle2pond' || nCat >= 9) continue;
+        if (placer.tryAt(e.x, e.z, sp('cattail'), null, { ignoreColliders: true })) (addInstance('cattail', e), nCat++);
+      }
+    }
+    // coconuts under a few cove palms
+    let nPalm = 0;
+    for (const t of allTrees) {
+      if (nPalm >= 6) break;
+      if (t.island !== 'isle2' || t.type !== 'palm' || t.alive === false) continue;
+      if (r2() < 0.5) continue;
+      coconutsUnder(placer, t, 1);
+      nPalm++;
+    }
   }
 
   function shuffle(a) {

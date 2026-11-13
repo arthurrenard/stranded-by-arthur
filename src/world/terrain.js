@@ -2,7 +2,8 @@
 // colored per vertex from ctx.world.biomeAt(), plus shader detail via onBeforeCompile:
 // world-space noise (grass speckle, sand ripples, rock strata), a subtle low-poly facet look,
 // an animated wet band at the sea shore, rain wetness, drifting cloud shadows and caustics
-// on shallow water beds. API: { mesh, material }.
+// on shallow water beds. v3: a second mesh for Tempest Isle (buildGeometry('isle2'), same material,
+// wilder colors: dark wet rock, wind-swept grass). API: { mesh, mesh2, meshes, material }.
 import * as THREE from 'three';
 import { createNoise2D } from 'simplex-noise';
 import { terrainColor } from './fx/terrainColors.js';
@@ -14,12 +15,6 @@ export function create(ctx) {
   const shared = worldShared(ctx);
   const U = shared.uniforms;
 
-  const geo = W.buildGeometry();
-  const pos = geo.attributes.position.array;
-  const count = pos.length / 3;
-  const colors = new Float32Array(count * 3);
-  const biome = new Float32Array(count * 4);
-
   const rng = ctx.rng.fork('terrain-colors');
   const nLow = createNoise2D(rng);
   const nMid = createNoise2D(rng);
@@ -28,48 +23,93 @@ export function create(ctx) {
   // fast path for the deep sea floor (most of the grid): skip biomeAt()
   const deep = { h: 0, slope: 0, rn: 2, water: { type: 'ocean', depth: 0 }, sand: 0, rock: 0, highland: 0, meadow: 0, wet: 0, forest: 0 };
   const lakes = W.lakes || [];
+  // Tempest Isle palette (v3): darker rain-soaked rock on the cliffs, grey-olive wind-swept grass
+  const WET_ROCK = [0.2, 0.215, 0.235]; // linear
+  const SWEPT = [0.19, 0.25, 0.12]; // linear grey-olive
+  const WIND = { x: 0.8, z: -0.6 }; // streak direction of the flattened grass (prevailing gale)
 
-  for (let k = 0; k < count; k++) {
-    const x = pos[k * 3], h = pos[k * 3 + 1], z = pos[k * 3 + 2];
-    const n1 = nLow(x * 0.012, z * 0.012);
-    const n2 = nMid(x * 0.05, z * 0.05);
-    const n3 = nHigh(x * 0.21, z * 0.21);
-    let b;
-    if (h < -3) {
-      deep.h = h;
-      deep.water.depth = -h;
-      b = deep;
-    } else {
-      b = W.biomeAt(x, z);
-    }
-    // height above the nearest fresh water surface (for mud banks + caustics)
-    let fresh = Infinity;
-    if (h >= -3) {
-      for (const L of lakes) {
-        const dl = Math.hypot(x - L.x, z - L.z);
-        if (dl < L.waterRadius * 1.4) fresh = Math.min(fresh, h - L.level);
+  /** Per-vertex biome colors (color) + shader biome data (aBiome) for one terrain geometry. */
+  function colorize(geo, wild) {
+    const pos = geo.attributes.position.array;
+    const count = pos.length / 3;
+    const colors = new Float32Array(count * 3);
+    const biome = new Float32Array(count * 4);
+    for (let k = 0; k < count; k++) {
+      const x = pos[k * 3], h = pos[k * 3 + 1], z = pos[k * 3 + 2];
+      const n1 = nLow(x * 0.012, z * 0.012);
+      const n2 = nMid(x * 0.05, z * 0.05);
+      const n3 = nHigh(x * 0.21, z * 0.21);
+      let b;
+      if (h < -3) {
+        deep.h = h;
+        deep.water.depth = -h;
+        b = deep;
+      } else {
+        b = W.biomeAt(x, z);
       }
-      const rv = W.riverAt?.(x, z);
-      if (rv && rv.d < rv.w * 2.5 && rv.surface > 0.05) fresh = Math.min(fresh, h - rv.surface);
-    }
-    terrainColor(b, n1, n2, n3, fresh, rgb);
-    colors[k * 3] = rgb[0];
-    colors[k * 3 + 1] = rgb[1];
-    colors[k * 3 + 2] = rgb[2];
+      // height above the nearest fresh water surface (for mud banks + caustics)
+      let fresh = Infinity;
+      if (h >= -3) {
+        for (const L of lakes) {
+          const dl = Math.hypot(x - L.x, z - L.z);
+          if (dl < L.waterRadius * 1.4) fresh = Math.min(fresh, h - L.level);
+        }
+        const rv = W.riverAt?.(x, z);
+        if (rv && rv.d < rv.w * 2.5 && rv.surface > 0.05) fresh = Math.min(fresh, h - rv.surface);
+      }
+      terrainColor(b, n1, n2, n3, fresh, rgb);
+      if (wild && h >= -3) {
+        // wet dark rock on cliffs and the peak, streaked by runoff
+        const wr = Math.min(1, b.rock * 1.15) * (0.75 + 0.25 * n2);
+        if (wr > 0) {
+          const t = wr * 0.8;
+          rgb[0] += (WET_ROCK[0] - rgb[0]) * t;
+          rgb[1] += (WET_ROCK[1] - rgb[1]) * t;
+          rgb[2] += (WET_ROCK[2] - rgb[2]) * t;
+        }
+        // grass flattened by the gale: grey-olive with long streaks along the wind
+        const grass = (1 - b.sand) * (1 - b.rock) * (b.water ? 0 : 1);
+        if (grass > 0) {
+          const along = x * WIND.x + z * WIND.z, across = x * WIND.z - z * WIND.x;
+          const streak = nMid(along * 0.015 + 40, across * 0.16 - 40) * 0.5 + 0.5;
+          const t = grass * (0.32 + 0.3 * streak);
+          rgb[0] += (SWEPT[0] - rgb[0]) * t;
+          rgb[1] += (SWEPT[1] - rgb[1]) * t;
+          rgb[2] += (SWEPT[2] - rgb[2]) * t;
+          const v = 0.9 + 0.2 * streak;
+          rgb[0] *= v;
+          rgb[1] *= v;
+          rgb[2] *= v;
+        }
+        // the whole isle sits under a darker sky: a touch less saturated sand too
+        const sd = b.sand * 0.12;
+        rgb[0] *= 1 - sd;
+        rgb[1] *= 1 - sd;
+        rgb[2] *= 1 - sd * 0.6;
+      }
+      colors[k * 3] = rgb[0];
+      colors[k * 3 + 1] = rgb[1];
+      colors[k * 3 + 2] = rgb[2];
 
-    // aBiome: x sand, y rock, z ocean-shore flag, w signed water depth (+ under water, - dry)
-    const ocean = fresh === Infinity ? Math.min(1, Math.max(0, (b.rn - 0.7) / 0.15)) : 0;
-    let wd;
-    if (b.water) wd = b.water.depth;
-    else if (fresh !== Infinity) wd = -Math.min(2, Math.max(0, fresh));
-    else wd = -Math.min(2, Math.max(0, h));
-    biome[k * 4] = b.sand;
-    biome[k * 4 + 1] = b.rock;
-    biome[k * 4 + 2] = ocean;
-    biome[k * 4 + 3] = wd;
+      // aBiome: x sand, y rock, z ocean-shore flag, w signed water depth (+ under water, - dry)
+      const ocean = fresh === Infinity ? Math.min(1, Math.max(0, (b.rn - 0.7) / 0.15)) : 0;
+      let wd;
+      if (b.water) wd = b.water.depth;
+      else if (fresh !== Infinity) wd = -Math.min(2, Math.max(0, fresh));
+      else wd = -Math.min(2, Math.max(0, h));
+      biome[k * 4] = b.sand;
+      biome[k * 4 + 1] = b.rock;
+      biome[k * 4 + 2] = ocean;
+      biome[k * 4 + 3] = wd;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.setAttribute('aBiome', new THREE.BufferAttribute(biome, 4));
+    return geo;
   }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geo.setAttribute('aBiome', new THREE.BufferAttribute(biome, 4));
+
+  const geo = colorize(W.buildGeometry('main'), false);
+  // Tempest Isle (v3): its own grid; same material, wilder colors
+  const geo2 = W.isle2 && W.grids?.some?.((g) => g.id === 'isle2') ? colorize(W.buildGeometry('isle2'), true) : null;
 
   const material = new THREE.MeshLambertMaterial({ vertexColors: true });
   material.name = 'world-terrain';
@@ -175,10 +215,24 @@ diffuseColor.rgb *= 1.0 - 0.24 * tWet;`
   mesh.updateMatrix();
   ctx.scene.add(mesh);
 
+  let mesh2 = null;
+  if (geo2) {
+    mesh2 = new THREE.Mesh(geo2, material);
+    mesh2.name = 'terrain-isle2';
+    mesh2.receiveShadow = true;
+    mesh2.castShadow = false;
+    mesh2.matrixAutoUpdate = false;
+    mesh2.updateMatrix();
+    ctx.scene.add(mesh2);
+  }
+
   let wet = 0;
 
   return {
     mesh,
+    /** Tempest Isle terrain (v3), or null. */
+    mesh2,
+    meshes: mesh2 ? [mesh, mesh2] : [mesh],
     material,
     init() {},
     update(dt) {

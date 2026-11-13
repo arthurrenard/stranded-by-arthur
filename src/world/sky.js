@@ -8,11 +8,17 @@
 // (toneMapped:false) with the same linear horizon Color as scene.fog → seamless horizon.
 //
 // API: { sun, hemi, ambient, fog, dome, colors:{zenith,horizon}, daylight,
-//        setFogDensity(d|null), flash(strength), setUnderwater(amount, color?) }
+//        setFogDensity(d|null), flash(strength), setUnderwater(amount, color?), localStorm }
+// v3: the fog thins with camera altitude and gains a far sea haze (Tempest Isle is a faint outline from the
+// main beaches, clear from the summit); inside Tempest Isle's local storm the horizon/fog go dark and dense.
 import * as THREE from 'three';
 import { worldShared } from './fx/shared.js';
 import { NOISE_GLSL, CLOUD_GLSL } from './fx/glsl.js';
 import { makeSkyState, skyState, snapToTexel, smooth } from './fx/skyPalette.js';
+import { installSeaHaze } from './fx/fogChunks.js';
+
+// v3: altitude-aware fog + far sea haze (fx/fogChunks.js). Patched at import, before any shader compiles.
+installSeaHaze(THREE);
 
 const DOME_VERT = /* glsl */ `
 varying vec3 vDir;
@@ -173,6 +179,7 @@ export function create(ctx) {
   const shared = worldShared(ctx);
   const U = shared.uniforms;
   const G = config.graphics;
+  installSeaHaze(THREE, ctx.world?.isle2); // re-centers the sea haze on the real isle (no-op when unchanged)
 
   // ── Fog (one FogExp2 for the whole game; only color/density mutate) ───────
   const fog = new THREE.FogExp2(0xa8cbe8, 0.0011);
@@ -340,6 +347,9 @@ export function create(ctx) {
   const texel = (2 * R) / G.shadowMapSize;
   let fogOverride = null;
   let underwater = 0;
+  const stormHor = new THREE.Color(0x3a4048); // horizon/fog inside Tempest Isle's storm (sRGB hex -> linear)
+  const stormZen = new THREE.Color(0x22272e);
+  const stormTmp = new THREE.Color();
   // lightning flicker: a few decaying pulses
   const pulses = []; // [startTime, strength]
   let clock = 0;
@@ -361,6 +371,8 @@ export function create(ctx) {
     moon,
     colors: { zenith: U.uZenith.value, horizon: U.uHorizon.value },
     daylight: 1,
+    /** Tempest Isle storm intensity at the camera (0..1), from ctx.weather.stormAt. */
+    localStorm: 0,
     /** Override the base fog density (null = automatic). Weather still adds rain haze on top. */
     setFogDensity(d) {
       fogOverride = d == null ? null : Math.max(0, Number(d) || 0);
@@ -400,6 +412,17 @@ export function create(ctx) {
       // sky gradient + fog (fog === horizon, linear colors)
       setSRGB(U.uZenith.value, st.zen);
       setSRGB(U.uHorizon.value, st.hor);
+      // Tempest Isle's local storm (weather already folded it into cloud/rain/storm): darker, denser murk
+      const cp = camera.position;
+      const local = Number(W?.stormAt?.(cp.x, cp.z)) || 0;
+      api.localStorm = local;
+      if (local > 0.001) {
+        const lit = 0.35 + 0.65 * T.daylight;
+        stormTmp.copy(stormHor).multiplyScalar(lit);
+        U.uHorizon.value.lerp(stormTmp, 0.6 * local);
+        stormTmp.copy(stormZen).multiplyScalar(lit);
+        U.uZenith.value.lerp(stormTmp, 0.45 * local);
+      }
       setSRGB(U.uGlowColor.value, st.glow);
       setSRGB(domeUniforms.uSunColor.value, st.sun);
       setSRGB(domeUniforms.uCloudLit.value, st.cLit);
@@ -412,7 +435,7 @@ export function create(ctx) {
       moonUniforms.uMoonVis.value = (underwater > 0.5 ? 0 : 1) * smooth(-0.04, 0.06, moonDir.y) * (1 - 0.65 * T.daylight);
       fog.color.copy(U.uHorizon.value);
       if (scene.background?.isColor) scene.background.copy(U.uHorizon.value);
-      fog.density = (fogOverride ?? st.fogDensity - (0.0038 * rain + 0.0028 * storm)) + 0.0038 * rain + 0.0028 * storm;
+      fog.density = (fogOverride ?? st.fogDensity - (0.0038 * rain + 0.0028 * storm)) + 0.0038 * rain + 0.0028 * storm + 0.0026 * local;
 
       // clouds drift with the wind
       const wx = ctx.uniforms.uWind.value.x, wz = ctx.uniforms.uWind.value.y;

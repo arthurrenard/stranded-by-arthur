@@ -2,7 +2,7 @@
 //
 // needs: [{ id, n }]  or  [{ any: [{ id, n }, ...] }]  (first affordable alternative is used)
 // tools: item ids that must be in the inventory but are NOT consumed (flint + pyrite for sparks)
-// place: structure type to build in front of the player (structures.place)
+// place: structure type to build in front of the player (structures.place); 'paddle_raft' goes to ctx.vehicles (v3)
 // atFire: only craftable within 3 m of a lit fire
 // warnLast: { id, text }: after crafting, warn with `text` if none of item `id` is left (pickaxe → flint)
 import { ITEMS } from '../core/items.js';
@@ -81,6 +81,18 @@ export const RECIPES = [
     gives: { id: 'diving_mask', n: 1 },
   },
   {
+    id: 'paddle',
+    name: 'Wooden Paddle',
+    icon: '🛶',
+    section: 'item',
+    desc: 'A carved paddle. You need one to paddle a raft (W/S paddle, A/D steer).',
+    needs: [
+      { id: 'wood', n: 2 },
+      { id: 'rope', n: 1 },
+    ],
+    gives: { id: 'paddle', n: 1 },
+  },
+  {
     id: 'campfire',
     name: 'Campfire',
     icon: '🔥',
@@ -127,6 +139,19 @@ export const RECIPES = [
     desc: 'A leaf roof on a wooden frame. Keeps the rain off; sleep here at night.',
     needs: [{ id: 'wood', n: 6 }, { id: 'leaves', n: 6 }, { any: [{ id: 'rope', n: 1 }, { id: 'fiber', n: 3 }] }],
     place: 'shelter',
+  },
+  {
+    id: 'paddle_raft',
+    name: 'Paddle Raft',
+    icon: '🪵',
+    section: 'place',
+    verb: 'Build',
+    desc: "Logs lashed with rope. Build it at the water's edge, board it (E) and paddle with a Wooden Paddle. Slow, but it can cross to Tempest Isle. Storms can flip it!",
+    needs: [
+      { id: 'wood', n: 8 },
+      { id: 'rope', n: 3 },
+    ],
+    place: 'paddle_raft', // v3: placed by ctx.vehicles (crafting.js routes it), not by structures
   },
   {
     id: 'herbal_tea',

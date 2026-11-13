@@ -1,6 +1,7 @@
 // Builder B — Flora. Procedural low-poly vegetation for Driftwood Isle (SPEC §6 B).
 //
-// create(): builds the species library (several variants per species), places ~3400 trees + boulders +
+// create(): builds the species library (several variants per species), places ~3400 trees + boulders (+ ~340 on
+//   Tempest Isle, v3: flora/isle2.js) +
 //   undergrowth from ctx.world.biomeAt, fills `trees` (Builder C reads it in its init), registers trunk
 //   and boulder colliders, indexes crowns for canopyAt(), then bakes everything into merged meshes per
 //   64 m chunk (one draw call per chunk, frustum-culled; see flora/bake.js for why not per-variant
@@ -19,6 +20,7 @@ import { createFloraMaterials } from './flora/materials.js';
 import { GrassPatch } from './flora/grass.js';
 import { FallingTrees } from './flora/falling.js';
 import { Saplings } from './flora/growth.js';
+import { placeIsle2Trees, placeIsle2Undergrowth } from './flora/isle2.js';
 
 const UNDER_VIEW_DIST = 170; // undergrowth chunks are hidden beyond this (m, camera to chunk box)
 const noRaycast = () => {};
@@ -28,9 +30,19 @@ export function create(ctx) {
   const rng = ctx.rng.fork('flora');
   const lib = buildLibrary(rng.fork('lib'));
   const { trees, boulders } = placeTrees(W, rng.fork('trees'), lib);
+  // v3: Tempest Isle (own rng forks, appended after the main island so its seeded layout never shifts).
+  // Entries get island:'isle2'; wind-bent pines keep type 'pine' with vk:'windPine' (the variant library key).
+  let isle2 = { trees: [], boulders: [] };
+  try {
+    if (W.isle2) isle2 = placeIsle2Trees(W, rng.fork('isle2-trees'), lib, trees.length);
+  } catch (e) {
+    console.error('[flora] Tempest Isle placement failed', e);
+  }
+  for (const t of isle2.trees) trees.push(t);
+  for (const o of isle2.boulders) boulders.push(o);
 
   // Internal per-tree state, kept off the public entries: collider, chunk handle, variant.
-  const meta = trees.map((t) => ({ collider: null, handle: null, V: t.v < 0 ? lib.carvedOak : lib[t.type][t.v] }));
+  const meta = trees.map((t) => ({ collider: null, handle: null, V: t.v < 0 ? lib.carvedOak : lib[t.vk ?? t.type][t.v] }));
 
   // ── Canopy index + colliders (no rendering involved: always available) ──
   const canopy = new CanopyIndex();
@@ -64,12 +76,15 @@ export function create(ctx) {
   try {
     ctx.scene?.add(group);
     mats = createFloraMaterials(ctx);
-    const tint = rng.fork('tint');
+    const tintMain = rng.fork('tint');
+    const tint2 = rng.fork('isle2-tint'); // Tempest Isle colors: separate stream (main-island tints unchanged)
+    let tint = tintMain;
 
     // Trees + boulders: merged per chunk, cast + receive shadows, swaying depth material.
     const tb = new ChunkBaker();
     for (const t of trees) {
       if (t.special) continue; // the carved oak is its own mesh (Builder F decorates it)
+      tint = t.island === 'isle2' ? tint2 : tintMain;
       const k = 0.86 + tint() * 0.26;
       let leaf = [k * (1 + (tint() - 0.5) * 0.14), k, k * (1 + (tint() - 0.5) * 0.12)];
       // a few early-autumn crowns for warm accents in the green
@@ -82,6 +97,7 @@ export function create(ctx) {
       meta[t.id].handle = tb.add(meta[t.id].V, { x: t.x, y: t.y, z: t.z, rot: t.rot, s: t.s, phase: t.phase, leafTint: leaf, barkTint: bark });
     }
     for (const o of boulders) {
+      tint = o.island === 'isle2' ? tint2 : tintMain;
       const k = 0.9 + tint() * 0.2;
       tb.add(lib.boulder[o.v], { x: o.x, y: o.y, z: o.z, rot: o.rot, s: o.s, phase: 0, windK: 0, barkTint: [k, k, k], leafTint: [k, k, k] });
     }
@@ -100,8 +116,16 @@ export function create(ctx) {
 
     // Undergrowth: ferns, bushes, flowers (bloom attribute), reeds, lily pads, rocks.
     const under = placeUndergrowth(W, rng.fork('under'), lib, trees, boulders);
+    const nMainUnder = under.length;
+    try {
+      if (W.isle2) for (const it of placeIsle2Undergrowth(W, rng.fork('isle2-under'), lib, isle2.trees, isle2.boulders)) under.push(it);
+    } catch (e) {
+      console.error('[flora] Tempest Isle undergrowth failed', e);
+    }
     const ub = new ChunkBaker({ close: true });
-    for (const it of under) {
+    for (let ui = 0; ui < under.length; ui++) {
+      const it = under[ui];
+      tint = ui < nMainUnder ? tintMain : tint2;
       const V = lib[it.kind][it.v];
       const k = it.kind === 'flower' ? 1 : 0.85 + tint() * 0.3;
       const tl = it.kind === 'flower' ? null : [k * (1 + (tint() - 0.5) * 0.1), k, k];

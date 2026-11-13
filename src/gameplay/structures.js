@@ -522,6 +522,7 @@ export function create(ctx) {
     s.lit = true;
     s.everLit = true;
     s.douse = 0;
+    s.envT = 0; // re-sample canopy / shelter / gale next frame
     s.warned = false;
     s.flare = 1;
     s.heat.lit = true;
@@ -542,6 +543,10 @@ export function create(ctx) {
     const p = ctx.player?.position;
     const near = !p || distXZ(p, s.position) < 120;
     if (!near) return;
+    if (reason === 'gale') {
+      toast('The gale blows your fire out!', { icon: '🌬️', kind: 'warn', key: 'fire' + s.id });
+      return;
+    }
     if (s.type === 'campfire') {
       if (reason === 'rain') toast('The downpour drowned your campfire! Relight it: flint + pyrite + 1 wood.', { icon: '🌧️', kind: 'warn', key: 'fire' + s.id });
       else toast('Your campfire burned out. Relight it with flint + pyrite and 1 wood.', { icon: '🪵', kind: 'warn', key: 'fire' + s.id });
@@ -806,6 +811,8 @@ export function create(ctx) {
       if (!(torch.burnLeft > 0)) torch.burnLeft = K.torchBurnHours;
       torch.douse = 0;
       torch.warned = false;
+      torch.gale = 0;
+      torch.envT = 0; // re-sample canopy + gale next frame
       ctx.heatSources?.add?.(torchHeat);
       ctx.audio?.play?.('ignite', { volume: 0.5 });
     } else {
@@ -858,6 +865,7 @@ export function create(ctx) {
         if (torch.envT <= 0 && p) {
           torch.envT = 0.5;
           torch.canopy = canopyAt(p.x, p.z);
+          torch.gale = galeAt(p); // v3: Tempest Isle storm
         }
         const eff = L.rainExposure(rain, torch.canopy, !!ctx.flags.sheltered);
         torch.douse = L.torchDouseStep(torch.douse, dtH, eff);
@@ -865,7 +873,10 @@ export function create(ctx) {
           torch.warned = true;
           toast('The rain is putting out your torch! Find cover under trees or a roof.', { icon: '🌧️', kind: 'warn', key: 'torch' });
         }
-        if (torch.burnLeft <= 0) {
+        if (torch.gale > 0.55) {
+          setTorch(false, 'gale');
+          toast('The gale blows your fire out!', { icon: '🌬️', kind: 'warn', key: 'torch' });
+        } else if (torch.burnLeft <= 0) {
           ctx.inventory?.remove?.('torch', 1);
           torch.burnLeft = K.torchBurnHours; // the next torch is fresh
           setTorch(false, 'burnt');
@@ -925,6 +936,14 @@ export function create(ctx) {
   }
 
   // ── Per-frame fire update ──────────────────────────────────────────────
+  /** v3: Tempest Isle storm strength at pos (0 when indoors: inside an indoor shelter such as the fishing hut). */
+  function galeAt(pos) {
+    const g = Number(ctx.weather?.stormAt?.(pos.x, pos.z)) || 0;
+    if (g <= 0.55) return g;
+    const indoor = ctx.weather?.isIndoors ? ctx.weather.isIndoors(pos) : !!ctx.isle2?.isIndoors?.(pos);
+    return indoor ? 0 : g;
+  }
+
   function updateFire(s, dt, dtH) {
     // environment (canopy can change when a tree falls; a lean-to may be built next to it)
     s.envT -= dt;
@@ -932,8 +951,11 @@ export function create(ctx) {
       s.envT = 1 + rng() * 0.2;
       s.canopy = canopyAt(s.position.x, s.position.z);
       s.covered = !!nearShelter(s.position, 1);
+      s.gale = galeAt(s.position); // v3: Tempest Isle storm
     }
-    s.rainEff = L.rainExposure(rain, s.canopy, s.covered);
+    // v3: rain where the fire is (api.rain is at the camera, which may be inside Tempest Isle's storm)
+    const rainHere = ctx.weather?.rainAt ? Number(ctx.weather.rainAt(s.position.x, s.position.z)) || 0 : rain;
+    s.rainEff = L.rainExposure(rainHere, s.canopy, s.covered);
     if (playing() && s.lit) {
       s.fuel = L.burnFuel(s.fuel, dtH, s.rainEff);
       if (s.boost > 0) s.boost = Math.max(0, s.boost - dtH);
@@ -947,7 +969,8 @@ export function create(ctx) {
         }
         if (s.douse < 0.2) s.warned = false;
       }
-      if (s.fuel <= 0) extinguish(s, 'fuel');
+      if (s.gale > 0.55) extinguish(s, 'gale');
+      else if (s.fuel <= 0) extinguish(s, 'fuel');
       else if (s.douse >= 1) extinguish(s, 'rain');
     }
     if (!s.lit && s.ember > 0) s.ember = Math.max(0, s.ember - dtH * (1 + s.rainEff * 4));

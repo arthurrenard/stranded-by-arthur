@@ -14,12 +14,19 @@ export function create(ctx) {
     return ctx.structures?.nearestFire?.(p, 3, true) ?? null;
   }
 
+  const NOT_NOW = { ok: false, reason: 'Building is not available right now.' };
+  /** v3: the paddle raft is placed by ctx.vehicles at the water's edge; everything else by structures. */
+  function placementOf(type) {
+    if (type === 'paddle_raft') return ctx.vehicles?.findRaftSpot?.() ?? NOT_NOW;
+    return ctx.structures?.findPlacement?.(type) ?? NOT_NOW;
+  }
+
   /** Per-call environment (placement results are cached for the call). */
   function env() {
     const cache = {};
     return {
       nearFire: !!nearLitFire(),
-      placement: (type) => (cache[type] ??= ctx.structures?.findPlacement?.(type) ?? { ok: false, reason: 'Building is not available right now.' }),
+      placement: (type) => (cache[type] ??= placementOf(type)),
     };
   }
 
@@ -67,7 +74,10 @@ export function create(ctx) {
     }
     let structure = null;
     if (r.place) {
-      structure = ctx.structures?.place?.(r.place, e.placement(r.place)) ?? null;
+      structure =
+        (r.place === 'paddle_raft'
+          ? ctx.vehicles?.placeRaft?.(e.placement(r.place))
+          : ctx.structures?.place?.(r.place, e.placement(r.place))) ?? null;
       if (!structure) {
         toast("You can't build that here.", { icon: r.icon, kind: 'warn', key: 'craft' });
         return { ok: false, reason: "Can't build here." };

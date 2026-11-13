@@ -298,7 +298,7 @@ export function signalContribution(kind, d, strength) {
  * Total attention rate. signals: [{ kind, d, strength }] (active ones only). parts (optional, reused
  * object) receives the per-method rates so the caller can tell what got the player noticed.
  */
-export function attentionRate(player, signals, blessed = false, parts = null) {
+export function attentionRate(player, signals, blessed = false, parts = null, mul = 1) {
   if (parts) for (const k of METHODS) parts[k] = 0;
   let total = 0;
   const pr = playerContribution(player);
@@ -316,6 +316,12 @@ export function attentionRate(player, signals, blessed = false, parts = null) {
   if (blessed) {
     total *= K.blessMul;
     if (parts) for (const k of METHODS) parts[k] *= K.blessMul;
+  }
+  // v3 difficulty: ctx.difficulty.rescueMul (easy 1, medium 0.3, hard 0 = never seen)
+  const m = Number.isFinite(mul) ? Math.max(0, mul) : 1;
+  if (m !== 1) {
+    total *= m;
+    if (parts) for (const k of METHODS) parts[k] *= m;
   }
   return total;
 }
@@ -335,9 +341,35 @@ export function speedFactor(att, threshold = 100) {
   return 1 - 0.55 * t * t * (3 - 2 * t);
 }
 
-/** A burning flare spots the player when the vehicle is within K.flareRange. */
-export function flareSpots(dVehicle) {
-  return dVehicle <= K.flareRange;
+/** A burning flare spots the player when the vehicle is within `range` (default K.flareRange; 0 = never). */
+export function flareSpots(dVehicle, range = K.flareRange) {
+  return range > 0 && dVehicle <= range;
+}
+
+// ── Difficulty (v3) ──────────────────────────────────────────────────────
+/**
+ * How the search party treats this difficulty. diff: ctx.difficulty ({ rescueMul, flareRange }) or null.
+ * -> { mul (attention multiplier >= 0), flareRange (m, 0 = flares never seen), hopeless (never spotted), hazy }
+ */
+export function difficultyRescue(diff) {
+  const m = Number(diff?.rescueMul);
+  const mul = Number.isFinite(m) ? Math.max(0, m) : 1;
+  const f = Number(diff?.flareRange);
+  const flareRange = Number.isFinite(f) ? Math.max(0, f) : K.flareRange;
+  return { mul, flareRange, hopeless: mul <= 0, hazy: mul > 0 && mul < 1 };
+}
+
+/** Pass closeness under a difficulty: when the player can never be seen, the passes stay far out to sea. */
+export function passCloseness(c, mul = 1) {
+  return mul <= 0 ? 0 : clamp01(c);
+}
+
+/** The one-time difficulty hint (null on easy). */
+export function difficultyHint(mul) {
+  if (mul <= 0) return "They're searching the wrong stretch of sea. You'll have to get yourself home.";
+  if (mul < 1)
+    return "The haze is thick out here: they'll barely see you. Only a big signal fire and waving close by will get their attention.";
+  return null;
 }
 
 /** Method key with the largest accumulated contribution (default 'visible'). */
@@ -370,7 +402,8 @@ export function missHint(s) {
   const who = s.kind === 'boat' ? 'The boat sailed away' : 'The helicopter flew off';
   const thr = s.threshold || 100;
   if (s.maxAttention >= thr * 0.5) return `${who}… So close! They almost saw you. Keep signaling: the next pass will come closer.`;
-  if (s.hasFlare && s.closest < K.flareRange) return `${who}… They were within flare range! Select your flare and press F when they're close.`;
+  const fr = s.flareRange ?? K.flareRange;
+  if (s.hasFlare && fr > 0 && s.closest < fr) return `${who}… They were within flare range! Select your flare and press F when they're close.`;
   if (!s.wasOpen) return `${who}… They couldn't see you under the trees. Get into the open: beaches and the summit are best.`;
   if (s.night && !s.hadNightLight) return `${who}… At night they only see light: a campfire, a torch, or better, a signal fire.`;
   if (!s.hadSignalFire) return `${who}… They didn't see you. A signal fire's smoke is visible for miles.`;

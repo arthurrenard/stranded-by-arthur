@@ -4,7 +4,9 @@
 // thousands cost nothing per frame. After a harvest the entry is hidden (enabled() false) until it regrows (~1 game day).
 // A fallen tree (alive === false) is hidden for good. Entry `data` deliberately has no `__res` flag: resources.js treats
 // `__res` data as an instanced mesh slot (hover pulse).
+// v3: every palm shake has a CONFIG.palmDeathChance (5 %) chance to drop a coconut on your head: game over ('coconut').
 import { ITEMS } from '../../core/items.js';
+import { CONFIG } from '../../config.js';
 
 /** Per tree type: what a harvest gives. `chance` = success odds per try (palm shake); a miss costs `missCooldownH`. */
 export const TREE_HARVESTS = {
@@ -15,6 +17,7 @@ export const TREE_HARVESTS = {
     item: 'coconut',
     n: [1, 1],
     chance: 0.3,
+    bonk: true, // v3: CONFIG.palmDeathChance per shake drops a coconut on your head (see bonk())
     missCooldownH: 0.025, // ~0.75 real s: the fronds are still swaying
     missMsg: ['The fronds rustle, but nothing falls. Shake again!', 'Nothing yet… the coconuts hang on tight.', 'A few dry fronds drift down. No coconut.'],
     burst: 0x86603a,
@@ -67,6 +70,10 @@ export function createTreeHarvest(ctx, deps) {
       audioPos.set(e.x, e.y + 0.6, e.z);
       ctx.audio?.play?.(def.sound, { position: audioPos, volume: def.sound === 'tree_creak' ? 0.45 : 1 });
     }
+    if (def.bonk && ctx.state === 'playing' && rand() < (CONFIG.palmDeathChance ?? 0.05)) {
+      bonk(e);
+      return;
+    }
     if (def.chance != null && rand() >= def.chance) {
       e.readyAt = t + (def.missCooldownH ?? 0);
       burst(e.x, e.y + 1.4, e.z, 0x9a8a50, 6);
@@ -91,6 +98,25 @@ export function createTreeHarvest(ctx, deps) {
     const extra = tree.type === 'palm' ? ' (a coconut thuds down!)' : '';
     ctx.ui?.toast?.(`+${added} ${itemName(def.item)}${extra}`, { icon: ITEMS[def.item]?.icon, kind: 'good', duration: 2 });
     ctx.events?.emit?.('harvest', { id: def.item, n: added, kind: 'tree_' + tree.type });
+  }
+
+  /** A coconut lands on the player's head: thud, white flash, "Bonk.", then death (god mode: just the bonk). */
+  function bonk(e) {
+    e.readyAt = now() + (e.def.missCooldownH ?? 0);
+    const p = ctx.player?.position;
+    audioPos.set(p ? p.x : e.x, p ? p.y + 1.7 : e.y, p ? p.z : e.z);
+    ctx.audio?.play?.('land', { volume: 1.2 });
+    ctx.ui?.flash?.('#fff', 0.2);
+    ctx.ui?.subtitle?.('Bonk.', 2);
+    burst(audioPos.x, audioPos.y + 0.2, audioPos.z, 0x86603a, 10);
+    ctx.events?.emit?.('palm:bonk', { tree: e.tree });
+    if (ctx.flags?.godMode) return;
+    // a beat for the gag to land, then lights out (waits out a pause)
+    const kill = () => {
+      if (ctx.state === 'paused') return void setTimeout(kill, 250);
+      if (ctx.state === 'playing' && !ctx.flags?.godMode) ctx.stats?.damage?.(1e4, 'coconut');
+    };
+    setTimeout(kill, 450);
   }
 
   function regrowAll() {

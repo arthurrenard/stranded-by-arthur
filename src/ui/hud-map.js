@@ -2,12 +2,15 @@
 // frame from init, so boot stays fast) from ctx.world heights + biomes into an RGBA buffer, then
 // turned into a canvas on first draw. Fog of war: a coarse grid revealed around the player.
 // The baking/fog logic is DOM-free; only draw() touches canvases.
+// v3: the map covers both islands (Driftwood Isle and Tempest Isle to the north-east), see MAP_BOUNDS.
 import { MAP_LANDMARKS } from './hud-data.js';
 import { clamp, smoothstep } from '../core/util.js';
 
-export const MAP_RANGE = 380; // the map shows x,z in [-RANGE, RANGE] (wreck at z~353 included)
-const BASE = 256; // baked relief resolution
-const FOG = 96; // fog-of-war grid resolution (~7.9 m cells)
+/** v3: the square of the world the map shows: x in [x0, x0 + size], z in [z0, z0 + size] (both islands + the wreck). */
+export const MAP_BOUNDS = { x0: -365, z0: -840, size: 1230 };
+const X0 = MAP_BOUNDS.x0, Z0 = MAP_BOUNDS.z0, SIZE = MAP_BOUNDS.size;
+const BASE = 384; // baked relief resolution (~3.2 m per pixel)
+const FOG = 150; // fog-of-war grid resolution (~8 m cells)
 const REVEAL_R = 46; // meters revealed around the player
 
 const C = {
@@ -49,7 +52,8 @@ export function createMap(ctx) {
   const col = [0, 0, 0];
   const LX = -0.55, LY = 0.72, LZ = -0.42; // light from the north-west for hillshade
 
-  const toWorld = (i, n) => -MAP_RANGE + ((i + 0.5) * 2 * MAP_RANGE) / n;
+  const toWorldX = (i, n) => X0 + ((i + 0.5) * SIZE) / n;
+  const toWorldZ = (j, n) => Z0 + ((j + 0.5) * SIZE) / n;
 
   function shadePixel(x, z, k) {
     const h = world.heightAt(x, z);
@@ -125,29 +129,29 @@ export function createMap(ctx) {
   }
 
   /** Bake a few rows (call every frame until it returns true). */
-  function bakeStep(rows = 6) {
+  function bakeStep(rows = 4) {
     if (baked || !world) return baked;
     const end = Math.min(BASE, row + rows);
     for (; row < end; row++) {
-      const z = toWorld(row, BASE);
-      for (let i = 0; i < BASE; i++) shadePixel(toWorld(i, BASE), z, row * BASE + i);
+      const z = toWorldZ(row, BASE);
+      for (let i = 0; i < BASE; i++) shadePixel(toWorldX(i, BASE), z, row * BASE + i);
     }
     if (row >= BASE) finishBake();
     return baked;
   }
 
   /** Reveal the fog of war around a world point. */
-  function reveal(x, z, r = REVEAL_R) {
-    const cell = (2 * MAP_RANGE) / FOG;
-    const ci = Math.floor((x + MAP_RANGE) / cell), cj = Math.floor((z + MAP_RANGE) / cell);
+  function reveal(x, z, r = REVEAL_R, max = 255) {
+    const cell = SIZE / FOG;
+    const ci = Math.floor((x - X0) / cell), cj = Math.floor((z - Z0) / cell);
     const n = Math.ceil(r / cell) + 1;
     for (let j = cj - n; j <= cj + n; j++) {
       if (j < 0 || j >= FOG) continue;
       for (let i = ci - n; i <= ci + n; i++) {
         if (i < 0 || i >= FOG) continue;
-        const wx = toWorld(i, FOG), wz = toWorld(j, FOG);
+        const wx = toWorldX(i, FOG), wz = toWorldZ(j, FOG);
         const d = Math.hypot(wx - x, wz - z);
-        const v = Math.round(255 * smoothstep(r, r * 0.55, d));
+        const v = Math.round(max * smoothstep(r, r * 0.55, d));
         const k = j * FOG + i;
         if (v > fog[k]) fog[k] = v;
       }
@@ -182,7 +186,7 @@ export function createMap(ctx) {
     return land ? seen / land : 0;
   }
 
-  const toPercent = (x, z) => [((x + MAP_RANGE) / (2 * MAP_RANGE)) * 100, ((z + MAP_RANGE) / (2 * MAP_RANGE)) * 100];
+  const toPercent = (x, z) => [((x - X0) / SIZE) * 100, ((z - Z0) / SIZE) * 100];
 
   /** Render the map into a canvas (browser only). */
   function draw(canvas) {
@@ -212,18 +216,21 @@ export function createMap(ctx) {
     g.drawImage(baseCanvas, 0, 0, W, W);
     g.drawImage(fogCanvas, 0, 0, W, W);
     // 100 m grid
-    const m2px = W / (2 * MAP_RANGE);
-    g.strokeStyle = 'rgba(255,255,255,0.07)';
+    const m2px = W / SIZE;
+    g.strokeStyle = 'rgba(255,255,255,0.06)';
     g.lineWidth = 1;
-    for (let m = -300; m <= 300; m += 100) {
-      const q = (m + MAP_RANGE) * m2px;
-      g.beginPath();
+    g.beginPath();
+    for (let m = Math.ceil(X0 / 100) * 100; m <= X0 + SIZE; m += 100) {
+      const q = (m - X0) * m2px;
       g.moveTo(q, 0);
       g.lineTo(q, W);
+    }
+    for (let m = Math.ceil(Z0 / 100) * 100; m <= Z0 + SIZE; m += 100) {
+      const q = (m - Z0) * m2px;
       g.moveTo(0, q);
       g.lineTo(W, q);
-      g.stroke();
     }
+    g.stroke();
     // north arrow
     g.fillStyle = 'rgba(255,246,226,0.92)';
     g.font = 'bold 18px system-ui, sans-serif';
@@ -253,6 +260,8 @@ export function createMap(ctx) {
   return {
     bakeStep,
     reveal,
+    /** v3: a faint glimpse of a far-away area (fog lifted to at most `level` 0..255), e.g. Tempest Isle seen from the summit. */
+    glimpse: (x, z, r, level = 80) => reveal(x, z, r, level),
     checkLandmarks,
     exploredFraction,
     toPercent,

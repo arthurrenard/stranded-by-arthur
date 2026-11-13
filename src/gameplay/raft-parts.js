@@ -20,10 +20,12 @@ export function isBeachSpot(world, x, z) {
 
 /**
  * placeParts(world, rng, list, opts) -> [{ id, where, x, y, z }]
- *   list: [{ id, where: 'beach'|'buried'|'rock'|'underwater' }] (raft-logic partList)
+ *   list: [{ id, where: 'beach'|'buried'|'rock'|'underwater'|'isle2hut' }] (raft-logic partList; 'isle2hut' entries are skipped)
  *   opts.avoid: [{ x, z, r }] keep-out circles (crates, camp, site...), opts.blocked(x, z, r) -> bool (colliders)
  */
 export function placeParts(world, rng, list, opts = {}) {
+  // v3: 'isle2hut' parts (the compass) are never placed in the world: Tempest Isle's fishing hut holds them (ctx.isle2).
+  list = list.filter((p) => p.where !== 'isle2hut');
   const out = placePass(world, rng, list, opts, [], opts.blocked || null, true);
   let missing = missingFrom(list, out);
   if (missing.length) {

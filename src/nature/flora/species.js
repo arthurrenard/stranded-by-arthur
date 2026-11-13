@@ -3,7 +3,8 @@
 // crownR, canopy density...). Variants are generated once at load in local space (base of the trunk
 // at the origin, +Y up) and baked per instance into chunk meshes by bake.js.
 //
-// Trees: oak, pine, birch, palm, willow, apple, chestnut, snag, carvedOak (the landmark).
+// Trees: oak, pine, birch, palm, willow, apple, chestnut, snag, carvedOak (the landmark), windPine (v3, Tempest Isle;
+// entries keep type 'pine' and set vk: 'windPine').
 // Undergrowth: fern, bush, reeds, lily, boulder, rock, log, flower (with a closed pose), saplings.
 import { GeoBuilder, tube, blob, cone, frond, strip, octa, disc } from './builder.js';
 import { PAL, jit, mix, mul } from './palette.js';
@@ -278,6 +279,54 @@ export function makePine(rng) {
   });
   b.flutter = 0;
   return b.finish({ type: 'pine', trunkR: tr, canopy: 0.8 });
+}
+
+// ── Wind-bent pine (Tempest Isle) ────────────────────────────────────────
+/** A stunted pine shaped by the gales: the trunk leans along local +X and the flat crown tiers stream downwind. */
+export function makeWindPine(rng) {
+  const b = new GeoBuilder();
+  const H = rng.range(6.5, 11);
+  const tr = rng.range(0.2, 0.28);
+  const lean = rng.range(0.18, 0.3);
+  const lx = (t) => lean * H * t * t;
+  b.bendFn = bendBy(0.32, H * 0.15, H, 1.5);
+  const barkC = mix(PAL.bark, [0.3, 0.12, 0.06], 0.35);
+  const barkCol = (i) => jit(barkC, rng, 0.1, i === 0 ? 0.7 : 0.95);
+  tube(
+    b,
+    [
+      { x: 0, y: -0.4, z: 0, r: tr * 1.4 },
+      { x: lx(0.3), y: H * 0.3, z: (rng() - 0.5) * 0.2, r: tr * 0.85 },
+      { x: lx(0.65), y: H * 0.65, z: (rng() - 0.5) * 0.25, r: tr * 0.5 },
+      { x: lx(1), y: H, z: 0, r: 0 },
+    ],
+    6,
+    barkCol,
+    { rng, jitter: 0.06 }
+  );
+  b.part('leaf');
+  b.flutter = 0.02;
+  const n = 4 + Math.floor(rng() * 2);
+  const y0 = H * rng.range(0.34, 0.44);
+  const R0 = H * rng.range(0.21, 0.27);
+  const shade = rng.range(0.82, 0.98); // darker, wind-burnt needles
+  for (let k = 0; k < n; k++) {
+    const f = k / (n - 1);
+    const yb = y0 + (H * 0.86 - y0) * f;
+    const r = R0 * (1 - f * 0.65) * rng.range(0.9, 1.1);
+    const h = Math.max(0.8, r * 0.7);
+    cone(b, lx(yb / H) + r * rng.range(0.3, 0.55), yb, (rng() - 0.5) * 0.3, r, h, {
+      sides: 7,
+      droop: r * 0.12,
+      jitter: 0.22,
+      rng,
+      colRim: () => jit(PAL.pineLight, rng, 0.1, shade * 0.92),
+      colApex: () => jit(PAL.pine, rng, 0.08, 1.05 * shade),
+      colUnder: () => jit(PAL.pineDark, rng, 0.06, 0.5),
+    });
+  }
+  b.flutter = 0;
+  return b.finish({ type: 'pine', trunkR: tr, canopy: 0.6 });
 }
 
 // ── Birch ────────────────────────────────────────────────────────────────
@@ -743,6 +792,7 @@ export function buildLibrary(rng) {
     chestnut: many(5, makeChestnut),
     snag: many(5, makeSnag),
     carvedOak: makeCarvedOak(rng.fork('carved')),
+    windPine: Array.from({ length: 4 }, (_, i) => makeWindPine(rng.fork('wp' + i))), // v3: Tempest Isle
     saplingBroad: makeSaplingBroad(rng.fork('sapB')),
     saplingConifer: makeSaplingConifer(rng.fork('sapC')),
     fern: many(5, makeFern),

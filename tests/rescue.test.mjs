@@ -168,7 +168,7 @@ test('attentionRate sums parts and applies the blessing', () => {
 // Integrates attention along the actual route at 10 Hz for a whole pass (the heli flies at its
 // cruise altitude above a flat island, the boat at sea level).
 const COAST = L.buildCoastTable(() => 300, 72, 3);
-function simulate({ kind = 'helicopter', c, seed, player, playerY = 3, signals = [], daylight = 1 }) {
+function simulate({ kind = 'helicopter', c, seed, player, playerY = 3, signals = [], daylight = 1, mul = 1 }) {
   const rand = mulberry32(seed);
   const duration = L.passDuration(c, rand());
   const route = kind === 'boat' ? L.boatRoute(rand, c, player.x, player.z, (a) => L.coastRadiusAt(COAST, a)) : L.heliRoute(rand, c, player.x, player.z);
@@ -185,7 +185,7 @@ function simulate({ kind = 'helicopter', c, seed, player, playerY = 3, signals =
     const d = Math.hypot(o.x - player.x, alt - playerY, o.z - player.z);
     closest = Math.min(closest, d);
     for (const s of sig) s.d = Math.hypot(o.x - s.x, alt - (s.y ?? 1), o.z - s.z);
-    const rate = L.attentionRate({ ...player, d, daylight, fromBoat: kind === 'boat' }, sig, false);
+    const rate = L.attentionRate({ ...player, d, daylight, fromBoat: kind === 'boat' }, sig, false, null, mul);
     att = L.stepAttention(att, rate, 0.1);
     if (att >= R.spotThreshold) return { spotted: true, att, t, closest };
   }
@@ -251,6 +251,66 @@ test('miss hints pick the most useful advice', () => {
   assert.match(L.missHint({ ...base, kind: 'boat' }), /^The boat sailed away/);
   assert.match(L.sleptThroughText(['helicopter']), /helicopter/);
   assert.match(L.sleptThroughText(['boat']), /boat engine/);
+});
+
+// ── Difficulty (v3) ──────────────────────────────────────────────────────
+const P = CONFIG.difficulty.presets;
+test('difficulty presets: easy 1 / medium 0.3 / hard 0 attention, flare ranges 700 / 250 / 0', () => {
+  const e = L.difficultyRescue(P.easy), m = L.difficultyRescue(P.medium), h = L.difficultyRescue(P.hard);
+  assert.deepEqual([e.mul, m.mul, h.mul], [1, 0.3, 0]);
+  assert.deepEqual([e.flareRange, m.flareRange, h.flareRange], [700, 250, 0]);
+  assert.ok(!e.hopeless && !e.hazy && m.hazy && !m.hopeless && h.hopeless && !h.hazy);
+  const d = L.difficultyRescue(null); // no difficulty yet = easy defaults
+  assert.equal(d.mul, 1);
+  assert.equal(d.flareRange, L.K.flareRange);
+});
+
+test('attentionRate scales every part by the difficulty multiplier', () => {
+  const parts = {};
+  const player = { d: 80, open: true, exposed: true, waving: true, underwater: false, daylight: 1 };
+  const sig = [{ kind: 'signal_fire', d: 200, strength: 650 }];
+  const r1 = L.attentionRate(player, sig, false, parts);
+  const r3 = L.attentionRate(player, sig, false, parts, 0.3);
+  assert.ok(near(r3, r1 * 0.3));
+  assert.ok(near(r3, parts.waving + parts.signal_fire));
+  assert.equal(L.attentionRate(player, sig, true, parts, 0), 0);
+  assert.equal(parts.signal_fire, 0);
+});
+
+test('flare range follows the difficulty: 0 = never seen', () => {
+  assert.ok(L.flareSpots(240, 250) && !L.flareSpots(260, 250));
+  assert.ok(!L.flareSpots(0, 0) && !L.flareSpots(10, 0));
+  assert.ok(L.flareSpots(699, 700));
+});
+
+test('hard: passes stay far out, medium keeps the schedule closeness', () => {
+  assert.equal(L.passCloseness(1, 0), 0);
+  assert.equal(L.passCloseness(0.8, 0.3), 0.8);
+  assert.ok(L.closestApproach(L.passCloseness(1, 0), 0) > 350);
+});
+
+test('difficulty hints: wrong stretch of sea on hard, haze on medium, none on easy', () => {
+  assert.match(L.difficultyHint(0), /wrong stretch of sea/);
+  assert.match(L.difficultyHint(0.3), /signal fire/);
+  assert.equal(L.difficultyHint(1), null);
+  const base = { kind: 'helicopter', night: false, wasOpen: true, waved: true, hadSignalFire: true, hadNightLight: true, maxAttention: 0, threshold: 100 };
+  assert.doesNotMatch(L.missHint({ ...base, hasFlare: true, closest: 200, flareRange: 0 }), /flare range/);
+  assert.match(L.missHint({ ...base, hasFlare: true, closest: 200, flareRange: 250 }), /flare range/);
+});
+
+test('balance: hard never spots anyone, even a waving player beside a signal fire on the closest pass', () => {
+  const fire = [{ kind: 'signal_fire', x: 10, z: 291, strength: 650 }];
+  assert.equal(spotRate({ c: 1, player: { ...beach, waving: true }, signals: fire, mul: 0 }), 0);
+  assert.equal(spotRate({ kind: 'boat', c: 1, player: { ...beach, waving: true }, signals: fire, mul: 0 }), 0);
+});
+
+test('balance: medium is much harder than easy but a close pass with a signal fire + waving can work', () => {
+  const fire = [{ kind: 'signal_fire', x: 10, z: 291, strength: 650 }];
+  const waver = { ...beach, waving: true };
+  const easyWave = spotRate({ c: 1, player: waver });
+  const medWave = spotRate({ c: 1, player: waver, mul: 0.3 });
+  assert.ok(medWave < easyWave, `medium waving ${medWave} vs easy ${easyWave}`);
+  assert.ok(spotRate({ c: 1, player: waver, signals: fire, mul: 0.3 }) > 0, 'a close pass + fire + waving should sometimes work on medium');
 });
 
 test('bearing names follow north = -Z, east = +X', () => {

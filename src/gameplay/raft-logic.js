@@ -63,7 +63,11 @@ export function remainingNeeds(plan, fromStage = 0) {
   return out;
 }
 
-/** The parts placed in the world for a plan: [{ id, where }] (sailcloth bundles included, as 'beach'). */
+/** v3: parts that are not scattered on the main island but kept in Tempest Isle's fishing hut (ctx.isle2 gives them). */
+export const isHutPart = (p) => p?.where === 'isle2hut';
+
+/** The parts placed in the world for a plan: [{ id, where }] (sailcloth bundles included, as 'beach').
+ *  v3: 'isle2hut' parts are listed too (they count toward the supply) but raft.js does not place them. */
 export function partList(raftCfg, planId) {
   const out = [];
   const parts = raftCfg?.parts || {};
@@ -124,6 +128,9 @@ export function hintFor(id, info = {}) {
   if (where === 'rock') {
     if (!info.hasPickaxe) return 'Something glints inside a cracked rock: craft a pickaxe';
     return 'Break open the glinting cracked rock on the rocky high ground';
+  }
+  if (where === 'isle2hut') {
+    return "The fisherman's hut on Tempest Isle may have one: build a paddle raft and cross from the north-east beach";
   }
   if (where === 'underwater') {
     return info.hasMask

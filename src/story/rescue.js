@@ -50,6 +50,7 @@ export function create(ctx) {
   let sleepNote = null; // { kinds, wait } toast shown after waking up
   let loopsOn = false;
   let rescued = false;
+  let hazyHintShown = false, hopelessHintShown = false; // v3 one-time difficulty hints
   const watched = []; // fired flares: { h (flareFx handle), seen }
 
   // scratch (no per-frame allocations)
@@ -106,7 +107,9 @@ export function create(ctx) {
   // ── Passes ───────────────────────────────────────────────────────────────
   function startPass(def) {
     const kind = def.kind === 'boat' ? 'boat' : 'helicopter';
-    const c = clamp01(def.closeness ?? 0.5);
+    // v3 difficulty (read lazily, per pass): medium = hard to see, hard = never seen + passes stay far out
+    const D = L.difficultyRescue(ctx.difficulty);
+    const c = L.passCloseness(clamp01(def.closeness ?? 0.5), D.mul);
     const pp = playerPos();
     const rand = passRand(def);
     // same draw order as the balance simulation in tests/rescue.test.mjs
@@ -145,6 +148,8 @@ export function create(ctx) {
       roll: 0,
       attention: 0,
       maxAttention: 0,
+      rescueMul: D.mul,
+      flareRange: D.flareRange,
       closest: Infinity,
       totals: Object.fromEntries(L.METHODS.map((k) => [k, 0])),
       openTime: 0,
@@ -166,6 +171,10 @@ export function create(ctx) {
     const b = L.bearingName(o.x - pp.x, o.z - pp.z);
     const text = kind === 'boat' ? `A boat engine… A search boat, somewhere to the ${b}!` : `You hear a helicopter! It's coming from the ${b}.`;
     toast(text, { icon: ICON[kind], kind: 'story', duration: 6, key: 'rescue' });
+    if (D.hazy && !hazyHintShown) {
+      hazyHintShown = true;
+      toast(L.difficultyHint(D.mul), { icon: '🌫️', kind: 'warn', duration: 10, key: 'rescue-diff' });
+    }
     ctx.events.emit('rescue:passStart', { kind, index: def.index, closeness: c, debug: !!def.debug });
     return pass;
   }
@@ -180,6 +189,14 @@ export function create(ctx) {
     setLoop(p.kind, 0, p.position);
     ctx.events.emit('rescue:passEnd', { kind: p.kind, index: p.index, spotted: !!p.spotted });
     if (silent || p.spotted) return;
+    if (p.rescueMul <= 0) {
+      // hard: they can't see you at all; say it once, then let the passes drift by in silence
+      if (!hopelessHintShown) {
+        hopelessHintShown = true;
+        toast(L.difficultyHint(0), { icon: '🧭', kind: 'story', duration: 10, key: 'rescue' });
+      }
+      return;
+    }
     const text = L.missHint({
       kind: p.kind,
       night: p.night,
@@ -191,6 +208,7 @@ export function create(ctx) {
       maxAttention: p.maxAttention,
       threshold: THR,
       closest: p.closest,
+      flareRange: p.flareRange,
     });
     toast(text, { icon: ICON[p.kind], kind: 'warn', duration: 9, key: 'rescue' });
   }
@@ -359,7 +377,7 @@ export function create(ctx) {
     pInfo.sheltered = !!ctx.flags.sheltered;
     pInfo.fromBoat = !isHeli;
     pInfo.vis = clamp(1 - 0.3 * (Number(w?.rain) || 0) - 0.25 * (Number(w?.storm) || 0), 0.4, 1);
-    const rate = L.attentionRate(pInfo, sigList, !!ctx.flags.blessed, parts);
+    const rate = L.attentionRate(pInfo, sigList, !!ctx.flags.blessed, parts, p.rescueMul);
     p.attention = L.stepAttention(p.attention, rate, dt);
     for (const k of L.METHODS) p.totals[k] += (parts[k] || 0) * dt;
     p.maxAttention = Math.max(p.maxAttention, p.attention);
@@ -385,7 +403,7 @@ export function create(ctx) {
       toast("They're turning toward you!", { icon: '👀', kind: 'good', duration: 4, key: 'rescue-turn' });
     }
     for (const fw of watched) {
-      if (fw.h.burning && fw.h.t > 0.9 && L.flareSpots(g.position.distanceTo(fw.h.position))) {
+      if (fw.h.burning && fw.h.t > 0.9 && L.flareSpots(g.position.distanceTo(fw.h.position), p.flareRange)) {
         spotted('flare');
         return;
       }
@@ -658,7 +676,13 @@ export function create(ctx) {
       if (!fw.h.done) continue;
       watched.splice(i, 1);
       if (!fw.seen && !rescued && !pass?.spotted) {
-        toast('No one saw it… Save your next flare for when the search party is close.', { icon: '🧨', kind: 'warn', duration: 6, key: 'flare' });
+        const never = L.difficultyRescue(ctx.difficulty).flareRange <= 0;
+        toast(never ? 'No one saw it… Nobody is searching close enough to see a flare.' : 'No one saw it… Save your next flare for when the search party is close.', {
+          icon: '🧨',
+          kind: 'warn',
+          duration: 6,
+          key: 'flare',
+        });
       }
     }
   }

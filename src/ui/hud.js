@@ -10,13 +10,15 @@ import './hud.css';
 import { CONFIG } from '../config.js';
 import { ITEMS } from '../core/items.js';
 import { clamp, clamp01, fmtHour, angleDiff } from '../core/util.js';
-import { DEATH, RESCUE_METHOD, fmtDuration, heatWord, compassLabel, STRUCTURE_ICON, objectiveView, objectiveSig, raftWinText, relBearing, compassPlace } from './hud-data.js';
+import { DEATH, RESCUE_METHOD, fmtDuration, heatWord, compassLabel, STRUCTURE_ICON, objectiveView, objectiveSig, raftWinText, relBearing, compassPlace, HUNGER_ICON, deathLead, vehiclePanel, stormBannerOn, isleSightingDue } from './hud-data.js';
 import { createPanels } from './hud-panels.js';
 import { createMap } from './hud-map.js';
 
 const PX_PER_DEG = 3;
 const RAD2DEG = 180 / Math.PI;
 const MAX_TOASTS = 6;
+// v3: stats.js still toasts hunger warnings with the leaves icon; the hunger STAT icon is now a steak
+const HUNGER_TEXT = /hung|starv|stomach|famish|hollow|edible|eat\b|food/i;
 
 function el(tag, cls, parent, text) {
   const e = document.createElement(tag);
@@ -28,7 +30,7 @@ function el(tag, cls, parent, text) {
 
 const WARNINGS = {
   thirst: { icon: '💧', low: 'You are getting thirsty.', critical: 'You are dying of thirst! Find fresh water.', hint: 'Drink at Spring Pond, the river or Mirror Lake: look at the water and press E.' },
-  hunger: { icon: '🍃', low: 'Your stomach growls.', critical: 'You are starving!', hint: 'Berries, apples, chestnuts and coconuts are safe. Cooked food fills you up far more.' },
+  hunger: { icon: HUNGER_ICON, low: 'Your stomach growls.', critical: 'You are starving!', hint: 'Berries, apples, chestnuts and coconuts are safe. Cooked food fills you up far more.' },
   cold: { icon: '🥶', low: 'You are getting cold.', critical: 'You are freezing! Get warm, now.', hint: 'Stand in the sun, stay by a campfire, or light a torch (T). Being wet makes cold much worse.' },
   hot: { icon: '🥵', low: 'You are overheating.', critical: 'Heatstroke! Get into the shade and drink.', hint: 'Tree shade and water cool you down. Don\'t sprint in the afternoon sun.' },
   energy: { icon: '⚡', low: 'You are getting tired.', critical: 'You are exhausted.', hint: 'Rest a moment: energy comes back while you stand still. Baked yam and chamomile help.' },
@@ -94,6 +96,8 @@ export function create(ctx) {
   let objAcc = 1, objSig = null;
   let rescueKind = null, rescuePct = -1, rescueTipKey = '';
   let diveHintArmed = false;
+  // v3: vehicle panel, Tempest Isle storm banner, first sighting of the isle
+  let vehSig = '', stormShown = false, isleSighted = false;
 
   if (hasDom) build();
 
@@ -139,6 +143,10 @@ export function create(ctx) {
     E.cmpYard = el('div', 'cmp-marker cmp-yard', cmp, '⛵');
     E.cmpYard.title = 'Boatyard';
     E.cmpRescue = el('div', 'cmp-marker cmp-rescue', cmp, '🚁');
+    E.cmpRaft = el('div', 'cmp-marker cmp-yard', cmp, '🛶');
+    E.cmpRaft.title = 'Your paddle raft';
+    E.cmpIsle = el('div', 'cmp-marker cmp-yard', cmp, '🏝️');
+    E.cmpIsle.title = 'Tempest Isle';
     el('div', 'cmp-needle', cmp);
     E.cmpDeg = el('div', 'cmp-deg', game);
 
@@ -162,12 +170,18 @@ export function create(ctx) {
     E.objHint = el('div', 'obj-hint', E.obj);
     E.objReady = el('div', 'obj-ready', E.obj, '🔨 Ready to build at the Boatyard!');
 
-    // v2: search-party banner (top-centre, under the compass)
-    E.rescue = el('div', 'hud-rescue hud-glass', game);
+    // v2: search-party banner (top-centre, under the compass); v3: stacked with the storm banner
+    E.banners = el('div', 'hud-banners', game);
+    E.rescue = el('div', 'hud-rescue hud-glass', E.banners);
     E.rescueTitle = el('div', 'rs-title', E.rescue, '');
     const rsb = el('div', 'rs-bar', E.rescue);
     E.rescueFill = el('div', 'rs-fill', rsb);
     E.rescueTip = el('div', 'rs-tip', E.rescue, '');
+    E.storm = el('div', 'hud-storm hud-glass', E.banners, '⛈️ Storm over Tempest Isle: rafts capsize and fires go out. Get indoors!');
+    // v3: vehicle panel (above the hotbar while aboard)
+    E.vehicle = el('div', 'hud-vehicle hud-glass', game);
+    E.vehTitle = el('div', 'veh-title', E.vehicle, '');
+    E.vehSub = el('div', 'veh-sub', E.vehicle, '');
 
     // stats
     const st = el('div', 'hud-stats hud-glass', game);
@@ -175,7 +189,7 @@ export function create(ctx) {
     for (const [key, icon] of [
       ['health', '❤️'],
       ['thirst', '💧'],
-      ['hunger', '🍃'],
+      ['hunger', HUNGER_ICON],
       ['energy', '⚡'],
     ]) {
       const row = el('div', 'stat stat-' + key, st);
@@ -254,6 +268,7 @@ export function create(ctx) {
       console.log('[toast]', text);
       return null;
     }
+    if (opts.icon === '🍃' && HUNGER_TEXT.test(text)) opts = { ...opts, icon: HUNGER_ICON };
     const kind = opts.kind || 'info';
     const duration = opts.duration ?? (kind === 'story' ? 7 : kind === 'bad' ? 5 : 4);
     const key = opts.key || null;
@@ -426,7 +441,7 @@ export function create(ctx) {
     el('div', 'screen-title', card, 'YOU DIED');
     const day = info.day ?? ctx.time.day;
     const hour = info.hour ?? ctx.time.hour;
-    el('div', 'screen-lead', card, `${d.text} on day ${day}, ${fmtHour(hour)}.`);
+    el('div', 'screen-lead', card, deathLead(d, day, fmtHour(hour)));
     const S = ctx.stats_summary || {};
     statTiles(card, [
       [fmtDuration(survivedHours()), 'survived'],
@@ -437,13 +452,13 @@ export function create(ctx) {
     el('div', 'screen-tip', card, '💡 ' + d.tip);
     const b = el('button', 'btn', card, 'Try again');
     b.addEventListener('click', () => location.reload());
-    panels?.log(d.icon, `${d.text}.`);
+    panels?.log(d.icon, /[.!?]$/.test(d.text) ? d.text : `${d.text}.`);
   }
   function showWin(info = {}) {
     if (!root) return console.log('[win]', info);
     const card = endScreen('won');
     const sailed = info.method === 'raft';
-    el('div', 'screen-icon', card, sailed ? '⛵' : info.kind === 'boat' ? '🚤' : '🚁');
+    el('div', 'screen-icon', card, sailed ? (info.plan === 'motorboat_dock' ? '🚤' : '⛵') : info.kind === 'boat' ? '🚤' : '🚁');
     el('div', 'screen-title', card, sailed ? 'HOMEWARD BOUND!' : 'RESCUED!');
     const day = info.day ?? ctx.time.day;
     const hour = info.hour ?? ctx.time.hour;
@@ -609,6 +624,11 @@ export function create(ctx) {
       refreshObjective();
     });
     ev.on('item:removed', refreshObjective);
+    // v3: vehicles + Tempest Isle
+    ev.on('vehicle:placed', () => panels.log('🛶', 'Built a paddle raft.'));
+    ev.on('vehicle:capsized', (p) => panels.log('🌊', p?.type === 'boat' ? 'A storm flipped your boat at Tempest Isle.' : 'A storm capsized your raft.'));
+    ev.on('raft:voyage', (p) => panels.log('⛵', p?.to === 'isle2' ? 'Sailed the boat to Tempest Isle.' : 'Sailed the boat back to the Boatyard.'));
+    ev.on('isle2:stormStart', () => panels.log('⛈️', 'A storm rolled in over Tempest Isle.'));
   }
 
   function structName(t) {
@@ -703,6 +723,8 @@ export function create(ctx) {
       updateHotbar();
       updateRescue();
       updateSpecialMarkers();
+      updateVehicle();
+      updateStorm();
     }
     objAcc += dt;
     if (objAcc >= 0.5) {
@@ -715,6 +737,7 @@ export function create(ctx) {
       updateClock();
       updateChips();
       updateCompassMarkers();
+      if (playing && !isleSighted) checkIsleSighting();
     }
     if (playing && !api.menuOpen) {
       fogAcc += dt;
@@ -903,6 +926,56 @@ export function create(ctx) {
     const far = p && site ? Math.hypot(site.x - p.x, site.z - p.z) > 6 : false;
     if (far) placeCmpMarker(E.cmpYard, site.x - p.x, site.z - p.z, h, w, '⛵', false);
     else if (E.cmpYard.style.display !== 'none') E.cmpYard.style.display = 'none';
+    // v3: your paddle raft (when you're not on it)
+    const vr = ctx.vehicles?.raft;
+    const rp = vr && ctx.vehicles.current !== vr ? vr.object?.position : null;
+    if (p && rp && Math.hypot(rp.x - p.x, rp.z - p.z) > 6) placeCmpMarker(E.cmpRaft, rp.x - p.x, rp.z - p.z, h, w, '🛶', false);
+    else if (E.cmpRaft.style.display !== 'none') E.cmpRaft.style.display = 'none';
+    // v3: Tempest Isle, once you have seen it (hidden while you are on it)
+    const isle = ctx.world?.isle2;
+    const onIsle = p && isle ? Math.hypot(isle.x - p.x, isle.z - p.z) < (isle.R || 150) * 1.1 : false;
+    if (p && isle && (isleSighted || map?.discovered?.has?.('isle2')) && !onIsle) placeCmpMarker(E.cmpIsle, isle.x - p.x, isle.z - p.z, h, w, '🏝️', false);
+    else if (E.cmpIsle.style.display !== 'none') E.cmpIsle.style.display = 'none';
+  }
+
+  // ── v3: vehicle panel, storm banner, first sighting of Tempest Isle ────
+  function updateVehicle() {
+    const V = ctx.vehicles;
+    const cur = !ctx.flags.cinematic && ctx.state === 'playing' ? V?.current : null;
+    const view = vehiclePanel(cur, {
+      canHeadHome: !!V?.canHeadHome,
+      canDisembark: !!V?.canDisembark,
+      hasPaddle: (ctx.inventory?.count?.('paddle') ?? 0) > 0,
+      exhausted: !!ctx.stats?.exhausted,
+    });
+    const sig = view ? view.title + '|' + view.sub : '';
+    if (sig === vehSig) return;
+    vehSig = sig;
+    E.vehicle.classList.toggle('show', !!view);
+    if (!view) return;
+    E.vehTitle.textContent = view.title;
+    E.vehSub.textContent = view.sub;
+  }
+  function updateStorm() {
+    const isle = ctx.world?.isle2;
+    const p = ctx.player?.position;
+    const d = isle && p ? Math.hypot(p.x - isle.x, p.z - isle.z) : Infinity;
+    const on = !ctx.flags.cinematic && ctx.state === 'playing' && stormBannerOn(ctx.weather?.isle2Storm, d);
+    if (on === stormShown) return;
+    stormShown = on;
+    E.storm.classList.toggle('show', on);
+  }
+  function checkIsleSighting() {
+    const isle = ctx.world?.isle2;
+    const p = ctx.player?.position;
+    if (!isleSightingDue(p, isle)) return;
+    isleSighted = true;
+    hint(
+      'isle2_sighting',
+      "There's another island to the north-east… Tempest Isle. Too far to swim: craft a Wooden Paddle and a Paddle Raft, and cross from the north-east beach."
+    );
+    map?.glimpse?.(isle.x, isle.z, (isle.R || 150) * 1.1, 80);
+    panels?.log('🏝️', 'Spotted another island to the north-east: Tempest Isle.');
   }
 
   function statMax(key) {
