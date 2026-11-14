@@ -222,8 +222,8 @@ const _smooth = (e0, e1, x) => {
 export class WindEnvelope {
   constructor(rand = Math.random) {
     this.rand = rand;
-    this.lo = 0.15 + 0.1 * rand();
-    this.hi = 0.8;
+    this.lo = 0.22 + 0.1 * rand();
+    this.hi = 0.75;
     this.from = this.lo;
     this.phase = 'lull';
     this.t = 0;
@@ -236,16 +236,16 @@ export class WindEnvelope {
     if (this.phase === 'lull') {
       this.phase = 'rise';
       this.from = this.v;
-      this.hi = 0.65 + 0.35 * r();
-      this.dur = 5 + 10 * r();
+      this.hi = 0.6 + 0.3 * r();
+      this.dur = 9 + 12 * r(); // swells build slowly
     } else if (this.phase === 'rise') {
       this.phase = 'hold';
-      this.dur = 2 + 6 * r();
+      this.dur = 3 + 6 * r();
     } else if (this.phase === 'hold') {
       this.phase = 'fall';
       this.from = this.v;
-      this.lo = 0.15 + 0.1 * r();
-      this.dur = 5 + 10 * r();
+      this.lo = 0.22 + 0.1 * r();
+      this.dur = 9 + 12 * r();
     } else {
       this.phase = 'lull';
       this.dur = 10 + 30 * r();
@@ -271,9 +271,9 @@ export function createWind(ac, dest, N) {
   const bp = bq(ac, 'bandpass', 420, 0.8);
   const gust = gain(ac, 0);
   loopSrc(ac, N.pink, 1).connect(bp).connect(gust).connect(bed.out);
-  const gl = [lfo(ac, 0.071, 0, gust.gain), lfo(ac, 0.163, 0, gust.gain), lfo(ac, 0.031, 0, gust.gain)];
-  lfo(ac, 0.071, 140, bp.frequency);
-  lfo(ac, 0.113, 90, bp.frequency);
+  const gl = [lfo(ac, 0.047, 0, gust.gain), lfo(ac, 0.089, 0, gust.gain), lfo(ac, 0.023, 0, gust.gain)];
+  lfo(ac, 0.043, 90, bp.frequency);
+  lfo(ac, 0.067, 50, bp.frequency);
   const hsrc = loopSrc(ac, N.white, 1);
   const h1 = bq(ac, 'bandpass', 620, 9), h2 = bq(ac, 'bandpass', 940, 7);
   const hg = gain(ac, 0);
@@ -287,19 +287,23 @@ export function createWind(ac, dest, N) {
   loopSrc(ac, N.white, 0.9).connect(bq(ac, 'highpass', 2600, 0.7)).connect(bq(ac, 'lowpass', 9000, 0.7)).connect(lg).connect(bed.out);
   const ll = lfo(ac, 0.071, 0, lg.gain);
   const T = {
-    gust: new Target(gust.gain, 0, 0.6),
-    g0: new Target(gl[0].g.gain, 0, 0.6),
-    g1: new Target(gl[1].g.gain, 0, 0.6),
-    g2: new Target(gl[2].g.gain, 0, 0.6),
-    freq: new Target(bp.frequency, 420, 1.0, 0.03, true),
-    howl: new Target(hg.gain, 0, 1.2),
-    howlL: new Target(hl.g.gain, 0, 1.2),
-    rustle: new Target(lg.gain, 0, 0.8),
-    rustleL: new Target(ll.g.gain, 0, 0.8),
+    // long time constants: every change glides over seconds instead of stepping (smoother wind)
+    gust: new Target(gust.gain, 0, 1.8),
+    g0: new Target(gl[0].g.gain, 0, 2.5),
+    g1: new Target(gl[1].g.gain, 0, 2.5),
+    g2: new Target(gl[2].g.gain, 0, 2.5),
+    freq: new Target(bp.frequency, 420, 2.5, 0.03, true),
+    howl: new Target(hg.gain, 0, 2.2),
+    howlL: new Target(hl.g.gain, 0, 2.2),
+    rustle: new Target(lg.gain, 0, 1.6),
+    rustleL: new Target(ll.g.gain, 0, 1.6),
   };
   const env = new WindEnvelope();
   let acc = WIND_STEP; // first call updates at once
   let level = 0;
+  // the inputs are low-passed too: walking under a tree line or out of the forest must not make the wind jump
+  let sCanopy = -1, sInland = -1, sStorm = 0;
+  const follow = (cur, target, step, tau) => (cur < 0 ? target : cur + (target - cur) * (1 - Math.exp(-step / tau)));
   return {
     bed,
     /** Current slow envelope level (0..1), for debugging. */
@@ -319,21 +323,24 @@ export function createWind(ac, dest, N) {
       acc = 0;
       const any = w.base + w.howl + w.rustle;
       bed.setLevel(any > 0.002 ? 1 : 0, t, step, 0.5);
-      const storm = _clamp01(o?.storm ?? 0);
+      sStorm = follow(sStorm, _clamp01(o?.storm ?? 0), step, 4);
+      const storm = sStorm;
       const e = env.update(step);
       level = e + (1 - e) * storm; // storms: always near the peak
       if (!bed.connected) return;
       const calm = 1 - 0.7 * storm;
-      const canopy = _clamp01(o?.canopy ?? 0) * calm;
+      sCanopy = follow(sCanopy, _clamp01(o?.canopy ?? 0), step, 3);
+      sInland = follow(sInland, _smooth(25, 110, o?.coast ?? 0) * _clamp01(o?.forest ?? 0), step, 5);
+      const canopy = sCanopy * calm;
       const shelter = 1 - 0.55 * canopy; // x windLevels' (1 - 0.45 canopy) = ~0.25 under a full canopy
-      const inland = _smooth(25, 110, o?.coast ?? 0) * _clamp01(o?.forest ?? 0) * calm;
+      const inland = sInland * calm;
       const deep = 1 - 0.35 * inland; // the inland forest is calmer than the open beach
       const k = level * shelter * deep;
       const b = w.base * k;
       T.gust.set(0.6 * b, t);
-      T.g0.set(0.22 * b, t);
-      T.g1.set(0.15 * b, t);
-      T.g2.set(0.18 * b, t);
+      T.g0.set(0.1 * b, t); // gentle ripples (were ±55 % of the gust level: the wind pulsed)
+      T.g1.set(0.05 * b, t);
+      T.g2.set(0.09 * b, t);
       T.freq.set(360 + 320 * Math.min(1.5, strength) * (0.75 + 0.25 * level), t);
       const hw = w.howl * k;
       T.howl.set(0.16 * hw, t);
