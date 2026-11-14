@@ -81,4 +81,5 @@ a Bella message-in-a-bottle easter egg.
 - [x] Wave 2 done + wired (quality.js before sky, post.js around renderer.render). Spawn view now 197 calls / 1.8 M tris
   (was 231 / 2.67 M); golden hour/night reviewed. Was: Wave 2 (2 agents): D aesthetics (colors/materials/lighting/post FX/HUD skin/avatar look), E optimization (tree LOD, shadow
   casters, grass, quality presets + adaptive resolution in NEW src/gfx/quality.js → orchestrator wires it in main.js)
-- [~] Integrate + playtest DONE; commit + push in progress (2026-11-21)
+- [x] Integrate + playtest DONE; pushed + Pages deploy verified live (2026-11-21, bundle index-BmQPCHYp.js).
+  NEXT (optional): deploy server/ to Fly.io (docs/MULTIPLAYER.md) and set CONFIG.net.defaultServer; real two-machine test.
