@@ -37,7 +37,8 @@ Open **http://localhost:5173** and click **Click to begin**. Headphones recommen
   the middle of the stone circle (it's even better during the night-sky show).
 - **The rune puzzle.** At night the standing stones on the summit can be touched. Three clues are hidden around the islands; light
   the right four and something enormous happens.
-- **Multiplayer (early).** Pause → Multiplayer: create a session and share the 6-letter code, or join one. Players see each other,
+- **Multiplayer (early).** The first screen asks: **Play solo**, **Create lobby** (share the 6-letter code) or **Join lobby** (type a
+  friend's code). From a solo game you can still open a lobby later: Pause → Multiplayer. Players see each other,
   share gathered resources, fires, structures, the boat and the clock; Enter chats, P lists players. Solo play is unchanged.
   Hosting your own server costs a few dollars a month: see [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md).
 - **Graphics setting** (Pause → Graphics: Low / Medium / High) and automatic resolution scaling; distant trees use low-detail models.

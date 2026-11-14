@@ -276,14 +276,90 @@ events.on('rescue:success', (p) => {
   ctx.ui.showWin?.({ day: ctx.time.day, hour: ctx.time.hour, ...(p || {}) });
 });
 
-function wireOverlays() {
+// ── Title screen: Play solo / Create lobby / Join lobby, then (solo + create) a difficulty ──
+function wireTitle() {
+  let mode = 'solo';
+  let joining = false;
+  const nameEl = $('title-name'), roomEl = $('title-room'), msgEl = $('title-join-msg');
+  const LS = 'stranded.name';
+  try {
+    nameEl.value = localStorage.getItem(LS) || ctx.net?.name || '';
+  } catch (_) {}
+  const playerName = () => {
+    const n = (nameEl.value || '').trim().slice(0, 16) || 'Castaway';
+    try {
+      localStorage.setItem(LS, n);
+    } catch (_) {}
+    return n;
+  };
+  const showStep = (which) => {
+    $('mode-pick').classList.toggle('hidden', which !== 'mode');
+    $('difficulty-step').classList.toggle('hidden', which !== 'difficulty');
+  };
+  for (const btn of document.querySelectorAll('[data-mode]')) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      mode = btn.dataset.mode;
+      $('step-title').textContent = mode === 'create' ? 'Choose the lobby difficulty' : 'Choose a difficulty';
+      showStep('difficulty');
+    });
+  }
+  $('title-back').addEventListener('click', (e) => {
+    e.stopPropagation();
+    showStep('mode');
+  });
   for (const btn of document.querySelectorAll('[data-difficulty]')) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       setDifficulty(btn.dataset.difficulty);
+      if (mode === 'create') {
+        // open the room right away so friends can join while you watch the intro
+        ctx.net?.create?.(playerName());
+        events.once('game:start', () => {
+          const share = () => {
+            const code = ctx.net?.room;
+            if (code) ctx.ui.toast?.(`Lobby ${code} is open: share this code with friends. P shows who's here.`, { icon: '🌐', kind: 'good', duration: 12 });
+            else setTimeout(share, 1000);
+          };
+          setTimeout(share, 600);
+        });
+      }
       startGame(false);
     });
   }
+  roomEl.addEventListener('input', () => (roomEl.value = roomEl.value.toUpperCase().replace(/[^A-Z]/g, '')));
+  const doJoin = async () => {
+    if (joining) return;
+    const code = roomEl.value.trim();
+    if (code.length !== 6) {
+      msgEl.textContent = 'Enter the 6-letter code.';
+      return;
+    }
+    joining = true;
+    msgEl.textContent = 'Connecting…';
+    ctx.net?.join?.(code, playerName());
+    const t0 = performance.now();
+    while (performance.now() - t0 < 15000 && !ctx.net?.connected) await new Promise((r) => setTimeout(r, 200));
+    joining = false;
+    if (!ctx.net?.connected) {
+      ctx.net?.leave?.();
+      msgEl.textContent = "Couldn't join. Check the code (the host must be in the game).";
+      return;
+    }
+    msgEl.textContent = '';
+    startGame(true); // joiners skip the intro and land straight in the shared world (host's difficulty)
+  };
+  $('title-join').addEventListener('click', (e) => {
+    e.stopPropagation();
+    doJoin();
+  });
+  roomEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doJoin();
+  });
+}
+
+function wireOverlays() {
+  wireTitle();
   // Only REQUEST the lock here: the overlay stays up until pointerlockchange confirms it ('input:lock').
   // (Hiding it first made it pop up a second time whenever the browser refused the lock.)
   $('pause').addEventListener('click', () => {

@@ -296,3 +296,121 @@ body.debug #debug-errors {
   color: var(--ink-dim);
   margin-top: 6px;
 }
+
+/* Title: step 1 (solo / create / join) */
+.mode-pick {
+  margin: 18px 0 14px;
+  cursor: default;
+}
+.title-name {
+  font: inherit;
+  font-size: 15px;
+  color: var(--ink);
+  width: 240px;
+  text-align: center;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.35);
+}
+.mode-row {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.mode {
+  font: inherit;
+  color: var(--ink);
+  width: 220px;
+  padding: 16px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.38);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.mode b {
+  font-size: 19px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.mode span {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink-dim);
+}
+button.mode:hover,
+.mode-join:focus-within {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  background: rgba(242, 179, 91, 0.18);
+}
+.mode[data-mode='create'] b {
+  color: var(--accent-2);
+}
+.mode-join {
+  cursor: default;
+}
+.mode-join b {
+  color: var(--accent);
+}
+.join-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.join-row input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--ink);
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.08);
+}
+.join-row button,
+.link-btn {
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+.join-row button {
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: rgba(242, 179, 91, 0.25);
+}
+.join-msg {
+  min-height: 1em;
+  color: #ffb39a !important;
+}
+.step-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 16px;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 14px;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 0;
+}

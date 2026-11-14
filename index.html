@@ -35,10 +35,31 @@
           Survive, and find your way home.
         </p>
         <p class="story goal">Rebuild a boat from the wreckage and sail home, or get spotted by the search party.</p>
+        <!-- Step 1: how do you want to play? (wired in main.js: wireTitle) -->
+        <div id="mode-pick" class="mode-pick" data-stop>
+          <input id="title-name" class="title-name" type="text" maxlength="16" placeholder="Your name" autocomplete="off" />
+          <div class="mode-row">
+            <button class="mode" data-mode="solo"><b>Play solo</b><span>Just you and the island. You can still open a lobby later from the pause menu.</span></button>
+            <button class="mode" data-mode="create"><b>Create lobby</b><span>Host a game and share the 6-letter code with friends.</span></button>
+            <div class="mode mode-join">
+              <b>Join lobby</b>
+              <span>Enter a friend's code.</span>
+              <div class="join-row">
+                <input id="title-room" type="text" maxlength="6" placeholder="CODE" autocomplete="off" spellcheck="false" />
+                <button id="title-join" type="button">Join</button>
+              </div>
+              <span id="title-join-msg" class="join-msg"></span>
+            </div>
+          </div>
+        </div>
+        <!-- Step 2: difficulty (solo + create). Joiners use the host's difficulty. -->
+        <div id="difficulty-step" class="hidden" data-stop>
+          <div class="step-head"><button id="title-back" type="button" class="link-btn">← Back</button><span id="step-title">Choose a difficulty</span></div>
         <div class="difficulty-pick" data-stop>
           <button class="diff" data-difficulty="easy"><b>Easy</b><span>A forgiving island. Build a simple driftwood raft.</span></button>
           <button class="diff" data-difficulty="medium"><b>Medium</b><span>Thirst and wounds hit harder. Build an outrigger sailboat.</span></button>
           <button class="diff" data-difficulty="hard"><b>Hard</b><span>Hunger and thirst hurt before they run out. Rebuild a motor launch.</span></button>
+        </div>
         </div>
         <div class="controls">
           <span><b>WASD / ZQSD</b> move</span><span><b>Shift</b> sprint</span><span><b>Space</b> jump / swim up</span>
