@@ -39,8 +39,10 @@ assert.ok(near(L.lootSum(F.loot), 1, 1e-9), `CONFIG.fishing.loot sums to 1 (${L.
   assert.ok(L.fightDuration(F, 'old_boot') >= a, 'never shorter than the minimum');
   assert.ok(near(L.biteDelay(F, 0), F.biteMinSec) && near(L.biteDelay(F, 0.999999), F.biteMinSec + (F.biteMaxSec - F.biteMinSec) * 0.999999));
   assert.ok(F.biteMinSec >= 20 && F.biteMaxSec <= 45, 'bite window 20–45 s per the spec');
+  let seed = 12345; // deterministic: CI must never flake
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
   for (let k = 0; k < 200; k++) {
-    const rng = seq([Math.random(), Math.random(), Math.random(), Math.random()]);
+    const rng = seq([rand(), rand(), rand(), rand()]);
     const n = L.nibbleTimes(30, rng);
     assert.ok(n.length >= 1 && n.length <= 3, 'one to three nibbles');
     for (let i = 0; i < n.length; i++) {
