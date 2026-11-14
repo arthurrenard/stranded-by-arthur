@@ -395,12 +395,16 @@ export function create(ctx) {
     } else ctx.audio?.play?.('ui_click');
     return true;
   }
-  /** Close the open panel. Call from a user gesture (keydown/click) so pointer lock can be re-acquired. */
-  function closePanel() {
+  /**
+   * Close the open panel. Call from a user gesture (keydown/click) so pointer lock can be re-acquired.
+   * Browsers don't treat Escape as a user gesture (and Escape is the pointer-lock exit key), so a lock
+   * requested from an Escape keydown always fails: skip it and let main show the pause overlay once.
+   */
+  function closePanel(viaEscape = false) {
     if (!panels || !api.menuOpen) return;
     panels.hide();
     api.menuOpen = false;
-    if (ctx.state === 'playing') ctx.input?.lock?.();
+    if (ctx.state === 'playing' && !viaEscape) ctx.input?.lock?.();
     ctx.audio?.play?.('ui_click');
   }
 
@@ -503,7 +507,7 @@ export function create(ctx) {
       let which = null;
       for (const name in PANEL_KEYS) if (PANEL_KEYS[name].includes(code)) which = name;
       if (api.menuOpen) {
-        if (code === 'Escape' || (which && which === panels.current)) closePanel();
+        if (code === 'Escape' || (which && which === panels.current)) closePanel(code === 'Escape');
         else if (which) openPanel(which);
         return;
       }

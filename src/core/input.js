@@ -50,6 +50,8 @@ export function createInput(canvas, events) {
     },
     { passive: true }
   );
+  // A refused lock (no user gesture, or the browser's ~1 s cooldown after an Escape exit).
+  document.addEventListener('pointerlockerror', () => events?.emit('input:lockError'));
   document.addEventListener('pointerlockchange', () => {
     const was = locked;
     locked = document.pointerLockElement === canvas;

@@ -96,6 +96,11 @@ export function create(ctx) {
   let dead = false;
   let deathCause = null;
   let sleepingNow = false;
+  // Coconut knock-out aftermath (CONFIG.coconutKO): a fatigue window in absolute game hours + a real-time grace.
+  let fatigueUntilH = -1;
+  let graceLeft = 0;
+  let energyBefore = 0;
+  let graceDiff = null;
   let envTimer = 0;
   let warnTimer = 0;
   let clock = 0; // real seconds while playing (for cooldowns)
@@ -458,6 +463,57 @@ export function create(ctx) {
       }
     },
 
+    /** True during the post-knock-out headache (energy capped, slower recovery). */
+    get fatigued() {
+      return fatigueUntilH > 0;
+    },
+
+    /**
+     * Knocked out cold (a coconut to the head): fade out, skip CONFIG.coconutKO.knockoutHours, wake at healthFrac of max
+     * health, thirstier and hungrier (drainMul, floored at needFloor), with low energy and a fatigueHours headache.
+     * Never lethal by itself. Resolves true when it happened.
+     */
+    async knockOut(opts = {}) {
+      if (sleepingNow || dead || ctx.state !== 'playing') return false;
+      const KO = { ...(CONFIG.coconutKO || {}), ...opts };
+      const hours = clamp(num(KO.knockoutHours, 4), 0.25, 12);
+      sleepingNow = true;
+      ctx.flags.sleeping = true;
+      const fade = (to, s) => (typeof ctx.fade === 'function' ? ctx.fade(to, s) : Promise.resolve());
+      try {
+        await fade(1, 0.35);
+        const D = M.difficultyOf(ctx.difficulty);
+        ctx.time?.skipHours?.(hours);
+        const floor = num(KO.needFloor, 20);
+        const mul = num(KO.drainMul, 1.3);
+        const thirstLoss = hours * num(CONFIG.stats.thirstPerHour, 4) * num(D.thirstMul, 1) * mul;
+        const hungerLoss = hours * num(CONFIG.stats.hungerPerHour, 4.2) * num(D.hungerMul, 1) * mul;
+        values.thirst = Math.max(Math.min(values.thirst, floor), values.thirst - thirstLoss);
+        values.hunger = Math.max(Math.min(values.hunger, floor), values.hunger - hungerLoss);
+        values.health = Math.max(1, num(max.health, 100) * num(KO.healthFrac, 0.1));
+        M.changeEnergy(values, Math.min(0, 18 - values.energy), S);
+        fatigueUntilH = num(ctx.time?.hoursTotal, 0) + num(KO.fatigueHours, 2);
+        graceLeft = num(KO.graceSec, 45);
+        ctx.events.emit('stats:knockout', { hours });
+        envTimer = 0;
+        await new Promise((r) => setTimeout(r, 900));
+        await fade(0, 2.2);
+        ctx.ui?.subtitle?.('…ugh. How long was I out?', 3);
+        toast(`You come to on the sand with a pounding headache. ${hours} hours have passed. Drink and eat something!`, {
+          icon: '🤕',
+          kind: 'bad',
+          duration: 7,
+        });
+        return true;
+      } catch (e) {
+        console.error('[stats] knockOut failed', e);
+        return false;
+      } finally {
+        ctx.flags.sleeping = false;
+        sleepingNow = false;
+      }
+    },
+
     /** Debug helper: set some values, e.g. __game.stats.setValues({ thirst: 5, heat: 20 }). */
     setValues(partial = {}) {
       for (const k in partial) if (k in values && typeof partial[k] === typeof values[k]) values[k] = partial[k];
@@ -482,7 +538,26 @@ export function create(ctx) {
       tickIn.dtHours = num(ctx.time?.dtHours, 0);
       tickIn.god = !!ctx.flags.godMode;
       tickIn.diff = M.difficultyOf(ctx.difficulty); // lazily: the title screen may change it before game:start
+      if (graceLeft > 0) {
+        // just woke from a knock-out: no "early" (Hard) hunger/thirst damage for a moment, so you can reach water
+        graceLeft -= dt;
+        if (!graceDiff || graceDiff.src !== tickIn.diff) graceDiff = { ...tickIn.diff, earlyDamagePerSec: 0, src: tickIn.diff };
+        tickIn.diff = graceDiff;
+      }
+      energyBefore = values.energy;
       M.tick(values, tickIn, S, report);
+      if (fatigueUntilH > 0) {
+        const KO = CONFIG.coconutKO || {};
+        if (num(ctx.time?.hoursTotal, 0) >= fatigueUntilH) {
+          fatigueUntilH = -1;
+          toast('Your headache finally fades.', { icon: '🤕', kind: 'good' });
+        } else {
+          // the headache: slower recovery and a hard cap on energy
+          if (values.energy > energyBefore) values.energy = energyBefore + (values.energy - energyBefore) * num(KO.fatigueRegenMul, 0.4);
+          const cap = num(KO.fatigueEnergyCap, 45);
+          if (values.energy > cap) values.energy = cap;
+        }
+      }
       env.target = report.target;
 
       if (report.damage > 0) {

@@ -208,7 +208,18 @@ export const CONFIG = {
     motorboat: { speed: 8.5, reverse: 2.5, turnRate: 1.1 },
     boardRadius: 3.2,
   },
-  palmDeathChance: 0.05, // shaking a palm: a coconut may land on your head (game over)
+  palmDeathChance: 0.05, // shaking a palm: chance a coconut lands on your head
+  coconutKO: {
+    killChance: 0.35, // ...and that it kills you outright. Otherwise you are knocked out:
+    knockoutHours: 4, // unconscious on the sand for this many game hours
+    healthFrac: 0.1, // you wake up at 10 % health
+    drainMul: 1.3, // thirst and hunger drain this much faster while you're out (dehydrated, hungrier)
+    needFloor: 20, // ...but never below this (being knocked out must not be an instant thirst death)
+    fatigueHours: 2, // then a pounding headache for this many game hours:
+    fatigueEnergyCap: 45, //   energy can't go above this
+    fatigueRegenMul: 0.4, //   and recovers this much slower
+    graceSec: 45, // real seconds after waking with no "early" hunger/thirst damage (Hard)
+  },
 
   // Fishing minigame (src/gameplay/fishing.js): cast, wait, hook, reel with a tension bar.
   fishing: {

@@ -296,7 +296,8 @@ export function create(ctx) {
     const wishX = -sinY * iz + cosY * ix;
     const wishZ = -cosY * iz - sinY * ix;
     const sprintHeld = controllable && hasInput && input.isDown('sprint') && iz > -0.2;
-    if (controllable && input.wasPressed('jump')) jumpBuffer = JUMP_BUFFER;
+    // Space is also the fishing 'reel' key: never jump while a line is out
+    if (controllable && input.wasPressed('jump') && !ctx.fishing?.active) jumpBuffer = JUMP_BUFFER;
     else jumpBuffer = Math.max(0, jumpBuffer - dt);
 
     const prevX = position.x,

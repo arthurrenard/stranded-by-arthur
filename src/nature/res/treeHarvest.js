@@ -100,7 +100,10 @@ export function createTreeHarvest(ctx, deps) {
     ctx.events?.emit?.('harvest', { id: def.item, n: added, kind: 'tree_' + tree.type });
   }
 
-  /** A coconut lands on the player's head: thud, white flash, "Bonk.", then death (god mode: just the bonk). */
+  /**
+   * A coconut lands on the player's head: thud, white flash, "Bonk.". Then CONFIG.coconutKO.killChance (35 %) it's lights
+   * out for good ('coconut'); otherwise you're knocked out for a few hours (ctx.stats.knockOut). God mode: just the bonk.
+   */
   function bonk(e) {
     e.readyAt = now() + (e.def.missCooldownH ?? 0);
     const p = ctx.player?.position;
@@ -114,7 +117,10 @@ export function createTreeHarvest(ctx, deps) {
     // a beat for the gag to land, then lights out (waits out a pause)
     const kill = () => {
       if (ctx.state === 'paused') return void setTimeout(kill, 250);
-      if (ctx.state === 'playing' && !ctx.flags?.godMode) ctx.stats?.damage?.(1e4, 'coconut');
+      if (ctx.state !== 'playing' || ctx.flags?.godMode) return;
+      const killChance = CONFIG.coconutKO?.killChance ?? 0.35;
+      if (rand() < killChance || !ctx.stats?.knockOut) ctx.stats?.damage?.(1e4, 'coconut');
+      else ctx.stats.knockOut();
     };
     setTimeout(kill, 450);
   }

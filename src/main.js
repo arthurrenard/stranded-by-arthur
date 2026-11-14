@@ -272,11 +272,16 @@ function wireOverlays() {
       startGame(false);
     });
   }
+  // Only REQUEST the lock here: the overlay stays up until pointerlockchange confirms it ('input:lock').
+  // (Hiding it first made it pop up a second time whenever the browser refused the lock.)
   $('pause').addEventListener('click', () => {
     if (ctx.state !== 'paused') return;
-    ctx.state = 'playing';
-    $('pause').classList.add('hidden');
     ctx.input.lock();
+  });
+  events.on('input:lockError', () => {
+    if (ctx.state !== 'paused') return;
+    const cta = document.querySelector('#pause .cta');
+    if (cta) cta.textContent = 'Click again to resume';
   });
   events.on('input:unlock', () => {
     if (DEBUG) return; // automation-friendly: never auto-pause in debug mode
@@ -289,6 +294,8 @@ function wireOverlays() {
     if (ctx.state === 'paused') {
       ctx.state = 'playing';
       $('pause').classList.add('hidden');
+      const cta = document.querySelector('#pause .cta');
+      if (cta) cta.textContent = 'Click to resume';
     }
   });
   const sens = $('opt-sens');
