@@ -67,7 +67,14 @@ a Bella message-in-a-bottle easter egg.
   - B multiplayer: protocol.js, server/ (index.js, Dockerfile, fly.toml), net.js (759 lines), avatar.js, world-sync hooks DONE.
     MISSING: netUI.js + net.css (chat/player list), docs/MULTIPLAYER.md, net tests.
   - C fishing+HUD: fishing-logic.js + fishing.js DONE. MISSING: HUD fishing widget, overlap audit + toast queue, egg total 9 in the HUD.
-  - Orchestrator TODO: Esc double-pause fix, coconut KO (35 % death, else 10 % hp + 4 h knock-out + 2 h fatigue), Space guard while fishing.
+  - Orchestrator DONE (2026-11-21): Esc double-pause fix, coconut KO (35 % death, else 10 % hp + 4 h knock-out + 2 h fatigue,
+    tests/coconut-ko.test.mjs), Space guard while fishing, smoother wind (beds.js).
+  - VERIFIED in a frozen browser snapshot: intro crash (camera ≥ 2.9 m above the sea, deck rigid, debris pops), summit survey (first
+    trigger + replay, 154 m orbit, camera restored), runes debugSolve → Giant's Road built, walked 505/525 m onto Tempest Isle without
+    swimming, Bella bottle exact text (egg 2/9), egg total 9.
+  - Finishing run wf_8ad030be-b01 (2 agents: net UI/docs/tests + HUD widget/overlap) failed once on a network error and was retried.
+  - Perf profile at the spawn: 231 calls / 2.67 M tris; trees ≈ 1.4 M tris (71 calls), grass 305k, terrain 320k → wave-2 target: tree LOD.
+  - Hosting (searched 2026-11-21): Fly.io shared-cpu-1x 256 MB ≈ $2.19/mo + egress; Railway Hobby $5/mo incl. $5 usage.
   LESSON: at most 2 agents at a time now, with narrow scopes.
 - [ ] Wave 2 (2 agents): D aesthetics+wind, E optimization
 - [ ] Integrate + playtest, commit + push; hosting instructions to the user
