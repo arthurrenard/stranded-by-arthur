@@ -1,4 +1,7 @@
 # Multiplayer (v4 groundwork)
+> **Deployed (2026-11-22):** app `stranded-by-arthur-relay` in the Arthur Renard (`personal`) org, region `sjc`, at
+> `wss://stranded-by-arthur-relay.fly.dev` (health: https://stranded-by-arthur-relay.fly.dev/health). It's the game's default
+> server (`CONFIG.net.defaultServer`). Redeploy after server changes with `fly deploy --config server/fly.toml --remote-only --ha=false .`
 
 STRANDED can be played with friends on the same island: up to **8 castaways per session**, joined by a 6-letter room
 code. It is fully optional. With no server configured (`CONFIG.net.defaultServer` empty and no `?server=`), the game
@@ -56,13 +59,13 @@ The server image must be built from the **repository root**, because the server 
 2. **Sign up or log in**: `fly auth signup` (or `fly auth login`). New accounts need a card on file.
 3. **Create the app without deploying.** Run this from the repository root:
    ```sh
-   fly launch --no-deploy --copy-config --config server/fly.toml --dockerfile server/Dockerfile
+   fly launch --no-deploy --copy-config --config server/fly.toml
    ```
    Pick a unique app name (the `app` line in `server/fly.toml` is updated) and a region near your players
    (`cdg` = Paris is the default).
 4. **Deploy**, from the repository root (the trailing `.` is the build context):
    ```sh
-   fly deploy --config server/fly.toml --dockerfile server/Dockerfile .
+   fly deploy --config server/fly.toml .
    ```
    The build context is the whole repo. If uploads are slow, add a root `.dockerignore` with `node_modules`, `dist` and
    `graphify-out`.

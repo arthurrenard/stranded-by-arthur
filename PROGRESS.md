@@ -85,4 +85,5 @@ a Bella message-in-a-bottle easter egg.
   LIVE-SITE CHECKS (2026-11-22): survey button at the circle (+ during the aurora), runes solved by hand → causeway, 3 clues → journal,
   palm-shake knock-out (4 h, 10 hp, needs floored, fatigue), fish cooking (raw → grilled), 1280×720 overlap probe clean, server
   runs from the exact Dockerfile file set (binds 0.0.0.0, /health ok). Title backdrop now uses the new palette (user may prefer the old one).
-  NEXT (optional): deploy server/ to Fly.io (docs/MULTIPLAYER.md) and set CONFIG.net.defaultServer; real two-machine test.
+  SERVER DEPLOYED (2026-11-22): Fly app stranded-by-arthur-relay (org personal / Arthur Renard, sjc), wss://stranded-by-arthur-relay.fly.dev,
+  set as CONFIG.net.defaultServer. (old note: NEXT (optional): deploy server/ to Fly.io (docs/MULTIPLAYER.md) and set CONFIG.net.defaultServer; real two-machine test.

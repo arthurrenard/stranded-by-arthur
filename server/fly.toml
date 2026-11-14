@@ -1,12 +1,12 @@
 # Fly.io config for the STRANDED relay server. Deploy from the repository root (the Dockerfile needs src/):
 #   fly launch --no-deploy --copy-config --config server/fly.toml   (first time: pick a name + region)
-#   fly deploy --config server/fly.toml --dockerfile server/Dockerfile .
+#   fly deploy --config server/fly.toml --remote-only --ha=false .   (from the repo root; deployed as stranded-by-arthur-relay)
 # The game then connects to wss://<app-name>.fly.dev (set CONFIG.net.defaultServer or use ?server=).
-app = "stranded-relay"
-primary_region = "cdg"
+app = "stranded-by-arthur-relay"
+primary_region = "sjc"
 
 [build]
-  dockerfile = "server/Dockerfile"
+  dockerfile = "Dockerfile" # relative to this file; the build context is the repo root (see the deploy command)
 
 [env]
   PORT = "8787"

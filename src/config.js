@@ -236,7 +236,7 @@ export const CONFIG = {
 
   // Multiplayer groundwork (src/net/*, server/). Offline by default: the game is fully playable alone.
   net: {
-    defaultServer: '', // e.g. 'wss://stranded-by-arthur.fly.dev'; can also be set with ?server=
+    defaultServer: 'wss://stranded-by-arthur-relay.fly.dev', // the Fly.io relay (server/); ?server= overrides it
     tickHz: 15, // state updates per second sent to the server
     maxPlayers: 8,
     interpolationMs: 120, // remote avatars are rendered this far in the past for smooth motion
