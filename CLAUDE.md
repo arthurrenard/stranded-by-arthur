@@ -8,7 +8,7 @@
    - `graphify affected "<symbol>"` shows what breaks if it changes
    - `GRAPHIFY_BACKEND=none graphify update .` rebuilds the graph after code changes (run from this folder)
    - The human-readable overview is `graphify-out/GRAPH_REPORT.md`, the interactive one `graphify-out/graph.html`
-3. Per-module builder notes are in `docs/build-log/*.md`.
+3. Per-module builder notes are in `docs/build-log/*.md`. Multiplayer: `docs/MULTIPLAYER.md` (server in `server/`, tests `cd server && npm test`).
 4. Verify with `npm run check` (syntax + unit tests) and `npm run build`. For runtime checks, open `?debug=1&skipintro=1`
    and use `window.__game.debug` (see SPEC.md §8).
 
@@ -20,4 +20,4 @@
 ## Conventions
 - Ownership and interfaces are in SPEC.md §1 and §6. Every system is `create(ctx)` → api with `init()` and `update(dt)`.
 - All tunables are in `src/config.js`. Everything is procedural: no binary assets.
-- The player is vegetarian: plant foods only, no hunting or fishing.
+- Food: the game started plant-only (the user is vegetarian); in v4 the user explicitly asked for fishing and cooked fish, so fish exist now (no hunting of land animals).

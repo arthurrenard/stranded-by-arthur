@@ -9,10 +9,10 @@ src/nature/resources.js, src/gameplay/structures.js, src/gameplay/raft.js.
 - [x] server/index.js (+ package.json, Dockerfile, fly.toml, README.md)
 - [x] hooks: resources rid + hideById/regrowById; structures placeAt/lightById/extinguishById + ids on payloads; raft applyStage
 - [ ] avatar.js (procedural castaway, animation, name tag, interpolation)
-- [ ] net.js (ctx.net, panel wiring, URL params, host rules, clock sync, event relay with loop guard, avatars)
-- [ ] netUI.js + net.css (chat, player list)
-- [ ] docs/MULTIPLAYER.md
-- [ ] tests/net.test.mjs; node --check; scripts/check.mjs green
+- [x] net.js (ctx.net, panel wiring, URL params, host rules, clock sync, event relay with loop guard, avatars)
+- [x] netUI.js + net.css (chat, player list)
+- [x] docs/MULTIPLAYER.md
+- [x] tests (server/test.mjs + tests/net-protocol.test.mjs instead of tests/net.test.mjs); node --check; scripts/check.mjs green
 
 ## Done
 - protocol.js: MSG/LIMITS/SHARED_EVENTS/HOST_ONLY_EVENTS/ERRORS, encode/decode (16 KB cap), 6-letter room codes (no I/O),
@@ -28,5 +28,26 @@ src/nature/resources.js, src/gameplay/structures.js, src/gameplay/raft.js.
   structures.js placeAt(type,x,z,yaw) (emits structure:placed with remote:true), ids on fire:lit/fire:out/structure:placed,
   lightById/extinguishById; raft.js applyStage(index) (never backwards), exported on ctx.raft.
 
+- netUI.js + net.css (finisher): createNetUI(ctx, net) → {init, update, system}; Enter opens chat (sets ctx.ui.menuOpen
+  before unlock like hud panels, so the local sim freezes while typing), Enter sends + re-locks, Esc/blur cancels (stays
+  unlocked → main pauses once); 8 s lines colored by colorForId; P = player list (1 Hz refresh); bottom 96px, lifted above
+  .hud-stats if they overlap; hidden while offline.
+- net.js (finisher): mid-game join on another difficulty → toast + reload with ?difficulty=<host>&server&room&name&skipintro=1
+  (once: the reload writes ?mpdiff=<host>; skipped when it is present or the preset is unknown); before game:start → ctx.debug.difficulty(id).
+  Clients get a ctx.time.skipHours guard (syncSkipGuard: installed iff connected && !isHost, passes through while net's
+  own clock sync is applying; toast key 'net-skip'); restored on leave / host promotion. Native WebSocket only.
+- docs/MULTIPLAYER.md (local run, two tabs via Create → copy code, Fly.io + Railway, synced / not synced, limits, cost TODO).
+- server/test.mjs (npm test in server/): 10 checks green (welcome/host, snapshots exclude recipient, event relay no echo +
+  unknown dropped + time:set host-only, chat sanitize/cap, room full with MAX_PLAYERS=3, no_room/version, host
+  re-election, room gone when empty). Idle drop not testable (LIMITS frozen, no override). README tests section updated.
+
+- tests/net-protocol.test.mjs: 12 pure checks (encode/decode, room codes, sanitizers, validators, colors, ids, rate limiter,
+  angleDelta), no 'ws'. scripts/check.mjs green (16 tests).
+
 ## Left
-- avatar.js, net.js, netUI.js + net.css, docs/MULTIPLAYER.md, tests/net.test.mjs, verification.
+- Cost numbers in docs/MULTIPLAYER.md §7 (TODO for the orchestrator).
+- Not in this builder's files: server idle-drop override for tests (LIMITS frozen); stats.js sleep still shows its own
+  "You slept" toast on a client when the skip is refused; a root .dockerignore would shrink the Fly build context.
+- avatar.js exists (src/player/avatar.js, used by net.js) but was not in the finisher's file list and was not reviewed;
+  its Plan box stays unchecked.
+- In-browser verification of chat/player list/difficulty reload not done (no browser in this pass).

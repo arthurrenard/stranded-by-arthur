@@ -8,10 +8,10 @@ src/gameplay/inventory.js, tests/fishing.test.mjs.
 - [x] 1. fishing-logic.js pure state machine + tests (tests/fishing.test.mjs green)
 - [x] 2. fishing.js (float, line, rod, audio, loot, toasts, harvest, lore bottle)
 - [x] 3. isle2-fishing.js retired → shim hands isOnDock to ctx.fishing (standalone fallback keeps tests/isle2.test.mjs green); isle2.js: comment only
-- [ ] 4. HUD fishing widget + journal "Fishing" entry + inventory hints
-- [ ] 5. HUD overlap audit + zone table in hud.css + toast queue
-- [ ] 6. eastereggs.total instead of literal 7
-- [ ] 7. node --check, smoke imports, scripts/check.mjs
+- [x] 4. HUD fishing widget (centre column under the prompt) + journal clues (Secrets tab) + inventory hints (Fishing tip already in hud-data.js TIPS)
+- [x] 5. HUD overlap audit + zone table in hud.css + toast queue (≤4 visible, queue 10, same-key merge incl. queued, newest last); .hud-left (obj+tip), .hud-center (prompt+fish), subtitle bottom 126 / 180 aboard (#hud.hud-veh), vehicle bottom 122
+- [x] 6. eastereggs.total instead of literal 7 (journal.eggsTotal getter/setter → ctx.eastereggs.total, fallback 9; win screen)
+- [x] 7. node --check (hud.js, hud-panels.js, inventory.js), scripts/check.mjs exit 0 (no browser run)
 
 ## Design (decided before coding)
 - Logic/host split: fishing-logic.js has no THREE/DOM; `createFishingLogic(cfg, rng)` → `{ state, cast(), reel(), cancel(), tick(dt, input) }`
@@ -29,3 +29,8 @@ src/gameplay/inventory.js, tests/fishing.test.mjs.
 
 ## Notes
 (filled in as pieces land)
+- Fishing widget: phase text map FISH_TEXT in hud.js; bars only in fight/landed; tension ok <0.55 ≤ warn <0.8 ≤ hot, pulse ≥0.85;
+  prompt gets .off while ctx.fishing.fighting (the widget footer shows "R to give up" instead). DOM written only on change.
+- Clues: markJournal('clue:*') → panels.journal.clues → Secrets tab "Rune clues found: N" + a log line.
+- Inventory: TOOL_TEXT.fishing_rod (also makes the rod hotbar-usable); raw_fish/big_fish/crab warn "Cook it at a campfire first" (effects unchanged).
+- Open: controller.js still jumps on Space while fishing (not my file); the net chat zone (src/net) is not HUD-owned.

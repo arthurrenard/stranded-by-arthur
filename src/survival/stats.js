@@ -438,7 +438,12 @@ export function create(ctx) {
         if (Number.isFinite(t0)) {
           for (let i = 0; i <= 8; i++) chill += M.nightChill(t0 + (hours * i) / 8, num(D.nightChillPerDay, 0)) / 9;
         }
-        ctx.time?.skipHours?.(hours); // structures burns (and may put out) fires synchronously here
+        if (ctx.time?.skipHours?.(hours) === false) {
+          // refused (multiplayer client: only the host's clock can skip): wake straight back up, no rest gained
+          await fade(0, 0.8);
+          return false;
+        }
+        // (structures burns, and may put out, fires synchronously inside skipHours)
         sampleEnv(); // fire state at wake-up
         const fire = (fireAtBed + env.fire) / 2; // a fire that died mid-night only half counts
         const secPerHour = num(CONFIG.time?.dayLengthSec, 720) / 24;

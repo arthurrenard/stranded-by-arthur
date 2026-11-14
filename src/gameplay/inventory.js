@@ -18,7 +18,10 @@ export const TOOL_TEXT = {
   shovel: 'Look for disturbed sand mounds and press E to dig.',
   pickaxe: 'Look for cracked rocks with a glint inside and press E to break them open.',
   diving_mask: 'Keep it in your pack: hold X while swimming to dive, and your breath lasts twice as long.',
+  fishing_rod: 'Look at the water and press R to cast.',
 };
+/** v4: raw catches are edible but should be cooked (campfire, R). */
+const RAW_CATCH = new Set(['raw_fish', 'big_fish', 'crab']);
 // v2 tools count as usable so they get a hotbar slot (F explains them, see TOOL_TEXT)
 export const isUsable = (id) => !!id && (isConsumable(id) || id === 'torch' || id === 'flare' || id === 'bottle_empty' || id in TOOL_TEXT);
 
@@ -256,6 +259,8 @@ export function create(ctx) {
       ui()?.hint?.('raw_chanterelle', 'Raw chanterelles upset the stomach. Cook them at a campfire first (R at the fire).');
     } else if (id === 'nettle') {
       toast('Ouch! Raw nettles sting. Boil them into soup at a fire.', { icon: '🌿', kind: 'warn' });
+    } else if (RAW_CATCH.has(id)) {
+      later(1.2, () => toast('Cook it at a campfire first (R at the fire): raw, it turns your stomach.', { icon: '🔥', kind: 'warn', key: 'rawcatch' }));
     } else if (id === 'wild_root') {
       later(1.5, () => toast('Bitter… your stomach turns. Bake it next time.', { icon: '🥔', kind: 'warn' }));
     }

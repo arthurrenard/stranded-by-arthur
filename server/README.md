@@ -34,5 +34,8 @@ the Fly.io / Railway deployment and the cost estimate).
 - `fly.toml` — one `shared-cpu-1x` machine, `internal_port 8787`, auto stop/start.
 
 ## Tests
-From the repository root: `node tests/net.test.mjs` (starts the server in-process on a random port > 9000 and
-drives two WebSocket clients through join / snapshot / event / chat / host re-election).
+- `npm test` (= `node test.mjs`, from `server/`): starts the server in-process on a random port > 9000 and drives
+  real WebSocket clients through welcome + host flag, snapshot relay (never the recipient), event relay (never echoed
+  to the sender, `time:set` host-only), chat sanitizing, host re-election on leave and "room full". Exits 0 or 1.
+- `node tests/net-protocol.test.mjs` (from the repository root, also run by `npm run check`): the pure protocol helpers
+  (encode/decode, room codes, sanitizers, validators). It doesn't need `ws`.

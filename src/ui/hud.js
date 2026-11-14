@@ -16,7 +16,17 @@ import { createMap } from './hud-map.js';
 
 const PX_PER_DEG = 3;
 const RAD2DEG = 180 / Math.PI;
-const MAX_TOASTS = 6;
+const MAX_TOASTS = 4; // v4: visible at once (fading ones count); the rest wait in toastQueue
+const MAX_TOAST_QUEUE = 10;
+/** v4: fishing widget phase lines (ctx.fishing.phase). */
+const FISH_TEXT = {
+  waiting: 'Line cast… wait for a bite',
+  bite: 'BITE! Press Space',
+  fight: "Reel! Tap Space, don't snap the line",
+  landed: 'Landed!',
+  lost: 'It got away…',
+};
+const FISH_FOOT = { waiting: 'R to reel in', bite: '', landed: '', lost: '' };
 // v3: stats.js still toasts hunger warnings with the leaves icon; the hunger STAT icon is now a steak
 const HUNGER_TEXT = /hung|starv|stomach|famish|hollow|edible|eat\b|food/i;
 
@@ -80,7 +90,10 @@ export function create(ctx) {
   let hintActive = null; // { until }
   let hintGapUntil = 0;
   const scheduled = []; // [{ at, id, text }]
-  const toasts = new Map(); // key -> { el, timer }
+  const toasts = new Map(); // key -> rec { el, text, icon, timer, duration, kind, shown, key } (visible or queued)
+  const toastQueue = []; // v4: recs waiting for a free slot (FIFO, same-key merges in place)
+  // v4: fishing widget cache (DOM writes only on change)
+  const fishC = { on: false, fighting: false, phase: '', prog: -1, tens: -1, level: '', pulse: false, run: false, sec: -1 };
   let subtitleTimer = 0;
   let lastHurtFlash = -1;
   let fogAcc = 0, slowAcc = 0, fastAcc = 0;
@@ -160,8 +173,9 @@ export function create(ctx) {
     E.clkWeather = el('span', 'clk-weather', clk, '');
     E.journalBadge = el('div', 'hud-journal-badge', game, '📖 New journal entry · press J');
 
-    // v2: boat objective tracker (top-left)
-    E.obj = el('div', 'hud-obj hud-glass', game);
+    // v2: boat objective tracker (top-left); v4: one left column with the tip card under it (never overlapping)
+    E.left = el('div', 'hud-left', game);
+    E.obj = el('div', 'hud-obj hud-glass', E.left);
     const oh = el('div', 'obj-head', E.obj);
     el('span', 'obj-icon', oh, '⛵');
     E.objTitle = el('span', 'obj-title', oh, '');
@@ -219,12 +233,23 @@ export function create(ctx) {
     E.chips = el('div', 'hud-chips', st);
     E.chipEls = {};
 
-    // crosshair + prompt
+    // crosshair; v4: one centre column under it: the prompt, then the fishing widget
     E.cross = el('div', 'hud-cross', game);
-    E.prompt = el('div', 'hud-prompt', game);
+    const center = el('div', 'hud-center', game);
+    E.prompt = el('div', 'hud-prompt', center);
+    E.fish = el('div', 'hud-fish hud-glass', center);
+    E.fishPhase = el('div', 'fish-phase', E.fish, '');
+    const fbars = el('div', 'fish-bars', E.fish);
+    let frow = el('div', 'fish-row', fbars);
+    el('span', 'fish-lbl', frow, 'Catch');
+    E.fishProg = el('div', 'fish-fill prog', el('div', 'fish-bar', frow));
+    frow = el('div', 'fish-row', fbars);
+    el('span', 'fish-lbl', frow, 'Line');
+    E.fishTens = el('div', 'fish-fill ok', el('div', 'fish-bar', frow));
+    E.fishFoot = el('div', 'fish-foot', E.fish, '');
 
-    // hint card
-    E.hint = el('div', 'hud-hint hud-glass', game);
+    // hint card (v4: in the left column, under the objective tracker)
+    E.hint = el('div', 'hud-hint hud-glass', E.left);
     el('div', 'h-icon', E.hint, '💡');
     const hb = el('div', '', E.hint);
     el('div', 'h-title', hb, 'Tip');
@@ -273,38 +298,55 @@ export function create(ctx) {
     const duration = opts.duration ?? (kind === 'story' ? 7 : kind === 'bad' ? 5 : 4);
     const key = opts.key || null;
     let rec = key ? toasts.get(key) : null;
-    if (rec && rec.el.isConnected && !rec.el.classList.contains('out')) {
+    if (rec && !rec.el.classList.contains('out')) {
+      // same-key merge: a visible or queued toast with this key is updated in place
       rec.text.textContent = text;
       if (opts.icon) rec.icon.textContent = opts.icon;
       rec.el.className = 'toast ' + kind;
-      void rec.el.offsetWidth;
-      rec.el.classList.add('bump');
-      clearTimeout(rec.timer);
-    } else {
-      const t = el('div', 'toast ' + kind);
-      const icon = el('span', 't-icon', t, opts.icon || defaultIcon(kind));
-      const tx = el('span', 't-text', t, text);
-      E.toasts.appendChild(t);
-      rec = { el: t, text: tx, icon, timer: 0 };
-      const k = key || Symbol('toast');
-      rec.key = k;
-      toasts.set(k, rec);
-      // cap the stack
-      while (E.toasts.children.length > MAX_TOASTS) {
-        const first = E.toasts.firstElementChild;
-        for (const [kk, r] of toasts) if (r.el === first) toasts.delete(kk);
-        first.remove();
+      rec.kind = kind;
+      rec.duration = duration;
+      if (rec.shown) {
+        void rec.el.offsetWidth;
+        rec.el.classList.add('bump');
+        clearTimeout(rec.timer);
+        armToast(rec);
       }
+      return rec.el;
     }
-    const r = rec;
+    const t = el('div', 'toast ' + kind);
+    const icon = el('span', 't-icon', t, opts.icon || defaultIcon(kind));
+    const tx = el('span', 't-text', t, text);
+    rec = { el: t, text: tx, icon, timer: 0, duration, kind, shown: false, key: key || Symbol('toast') };
+    toasts.set(rec.key, rec);
+    toastQueue.push(rec);
+    if (toastQueue.length > MAX_TOAST_QUEUE) {
+      // drop the oldest queued routine toast (story / bad ones are kept when possible)
+      let i = toastQueue.findIndex((q) => q.kind !== 'story' && q.kind !== 'bad');
+      if (i < 0) i = 0;
+      const d = toastQueue.splice(i, 1)[0];
+      if (toasts.get(d.key) === d) toasts.delete(d.key);
+    }
+    pumpToasts();
+    return t;
+  }
+  /** Start the life timer of a shown toast; its removal frees a slot for the next queued one. */
+  function armToast(r) {
     r.timer = setTimeout(() => {
       r.el.classList.add('out');
       setTimeout(() => {
         r.el.remove();
         if (toasts.get(r.key) === r) toasts.delete(r.key);
+        pumpToasts();
       }, 480);
-    }, duration * 1000);
-    return r.el;
+    }, r.duration * 1000);
+  }
+  function pumpToasts() {
+    while (toastQueue.length && E.toasts.children.length < MAX_TOASTS) {
+      const r = toastQueue.shift();
+      r.shown = true;
+      E.toasts.appendChild(r.el); // newest at the bottom of the one column
+      armToast(r);
+    }
   }
   function defaultIcon(kind) {
     return { good: '✅', warn: '⚠️', bad: '❗', story: '📜' }[kind] || 'ℹ️';
@@ -370,6 +412,11 @@ export function create(ctx) {
     } else if (id.startsWith('egg:')) {
       const eid = id.slice(4);
       if (!J.eggs.has(eid)) J.eggs.set(eid, { name: data.name || eid, text: data.text || '' });
+    } else if (id.startsWith('clue:')) {
+      // v4: rune-puzzle clues (eastereggs.js) are listed as found clues in the Secrets tab
+      if (!J.clues.has(id)) panels.log(data.icon || 'ᚱ', `Clue found: ${data.title || 'a strange glyph'}.`);
+      J.clues.set(id, { title: data.title || data.name || 'A clue', text: data.text || data.body || '', icon: data.icon || 'ᚱ' });
+      journalUnread = true;
     } else {
       J.notes.set(id, { title: data.title || data.name || id, text: data.text || data.body || '', icon: data.icon || '📜' });
       journalUnread = true;
@@ -478,7 +525,7 @@ export function create(ctx) {
       [S.itemsCrafted || 0, 'crafted'],
       [S.foodsEaten || 0, 'meals'],
       [S.plantsGathered || 0, 'plants'],
-      [`${J ? J.eggs.size : 0}/${J ? J.eggsTotal : 7}`, 'secrets'],
+      [`${J ? J.eggs.size : 0}/${J ? J.eggsTotal : ctx.eastereggs?.total ?? '?'}`, 'secrets'],
     ]);
     const passes = !sailed && info.passes != null ? ` The search party came by ${info.passes} time${info.passes === 1 ? '' : 's'}.` : '';
     el('div', 'screen-tip', card, `You made it off Driftwood Isle.${passes} Thanks for playing!`);
@@ -719,6 +766,7 @@ export function create(ctx) {
 
     updateCompass();
     updateVignettes(dt);
+    updateFishing();
 
     fastAcc += dt;
     if (fastAcc >= 0.1) {
@@ -956,9 +1004,74 @@ export function create(ctx) {
     if (sig === vehSig) return;
     vehSig = sig;
     E.vehicle.classList.toggle('show', !!view);
+    root.classList.toggle('hud-veh', !!view); // v4: lifts the subtitle above the vehicle panel
     if (!view) return;
     E.vehTitle.textContent = view.title;
     E.vehSub.textContent = view.sub;
+  }
+  /** v4: the fishing widget under the crosshair (every frame while active; writes only on change). */
+  function updateFishing() {
+    const F = ctx.fishing;
+    const on = !!F?.active && ctx.state === 'playing' && !ctx.flags.cinematic && !api.menuOpen;
+    const fighting = on && !!F.fighting;
+    if (fighting !== fishC.fighting) {
+      fishC.fighting = fighting;
+      E.prompt.classList.toggle('off', fighting); // the interaction prompt hides during the bite + fight
+    }
+    if (on !== fishC.on) {
+      fishC.on = on;
+      E.fish.classList.toggle('show', on);
+      if (!on) fishC.phase = '';
+    }
+    if (!on) return;
+    const ph = F.phase;
+    if (ph !== fishC.phase) {
+      fishC.phase = ph;
+      let txt = FISH_TEXT[ph] || '';
+      if (ph === 'lost') {
+        const why = F.state?.result?.reason;
+        if (why === 'snap') txt = 'Snap! The line broke. It got away…';
+        else if (why === 'cancel' || why === 'moved') txt = 'You reel the line in.';
+        else if (why === 'early') txt = 'Too early! It got away…';
+      }
+      E.fishPhase.textContent = txt;
+      E.fish.classList.toggle('bite', ph === 'bite');
+      E.fish.classList.toggle('fight', ph === 'fight' || ph === 'landed');
+      E.fish.classList.toggle('landed', ph === 'landed');
+      E.fish.classList.toggle('lost', ph === 'lost');
+      if (ph !== 'fight') E.fishFoot.textContent = FISH_FOOT[ph] ?? '';
+      fishC.sec = -1;
+    }
+    const prog = Math.round(clamp01(ph === 'landed' ? 1 : F.progress || 0) * 100);
+    if (prog !== fishC.prog) {
+      fishC.prog = prog;
+      E.fishProg.style.transform = `scaleX(${prog / 100})`;
+    }
+    const tv = clamp01(F.tension || 0);
+    const tens = Math.round(tv * 100);
+    if (tens !== fishC.tens) {
+      fishC.tens = tens;
+      E.fishTens.style.transform = `scaleX(${tens / 100})`;
+      const level = tv < 0.55 ? 'ok' : tv < 0.8 ? 'warn' : 'hot';
+      const pulse = tv >= 0.85;
+      if (level !== fishC.level || pulse !== fishC.pulse) {
+        fishC.level = level;
+        fishC.pulse = pulse;
+        E.fishTens.className = 'fish-fill ' + level + (pulse ? ' pulse' : '');
+      }
+    }
+    const run = ph === 'fight' && !!F.run;
+    if (run !== fishC.run) {
+      fishC.run = run;
+      E.fish.classList.toggle('run', run);
+    }
+    if (ph === 'fight') {
+      const sec = Math.max(0, Math.ceil(F.timeLeft || 0));
+      if (sec !== fishC.sec) {
+        fishC.sec = sec;
+        E.fishFoot.textContent = `${sec} s left · R to give up`;
+      }
+    }
   }
   function updateStorm() {
     const isle = ctx.world?.isle2;

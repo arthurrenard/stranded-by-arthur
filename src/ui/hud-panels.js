@@ -20,11 +20,21 @@ const NAV = [
 ];
 
 export function createPanels(ctx, ui, host, map) {
+  // v4: the egg total comes from ctx.eastereggs.total (9 since v4); the stored value is only the fallback
+  // (set from the easter:found payload) for when the easter-egg system is absent.
+  let eggsStored = 9;
   const journal = {
     plants: new Set(), // plant ids discovered (gathered at least once)
     poisonous: new Set(), // plant ids known to be poisonous (eaten, or marked by a note)
     eggs: new Map(), // id -> { name, text }
-    eggsTotal: 7,
+    get eggsTotal() {
+      const t = ctx.eastereggs?.total;
+      return t > 0 ? t : eggsStored;
+    },
+    set eggsTotal(v) {
+      if (v > 0) eggsStored = v;
+    },
+    clues: new Map(), // v4: 'clue:<id>' (rune puzzle) -> { title, text, icon }
     notes: new Map(), // entryId -> { title, text, icon }
     log: [], // { t (hoursTotal), icon, text }
     seenItems: new Set(),
@@ -221,6 +231,16 @@ export function createPanels(ctx, ui, host, map) {
         const row = el('div', 'egg', body);
         el('span', 'e-icon', row, '❔');
         el('span', 'muted', row, '??? The island still hides something.');
+      }
+      if (journal.clues.size) {
+        el('div', 'sec-title', body, `Rune clues found: ${journal.clues.size}`);
+        for (const [, c] of journal.clues) {
+          const row = el('div', 'egg found clue', body);
+          el('span', 'e-icon', row, c.icon);
+          const tx = el('div', '', row);
+          el('b', '', tx, c.title);
+          if (c.text) el('div', 'p-desc', tx, c.text).style.whiteSpace = 'pre-line';
+        }
       }
       if (journal.notes.size) {
         el('div', 'sec-title', body, 'Notes & pages');

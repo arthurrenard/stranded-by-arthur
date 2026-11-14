@@ -1,6 +1,33 @@
 /* HUD styles (Builder E). Uses the global tokens from src/style.css (--panel, --accent, --ink, --font...).
    #hud itself stays static (no stacking context) so each layer can pick its own z-index relative to the
-   global overlays: letterbox 40, #fade 50, #title/#pause 60. */
+   global overlays: letterbox 40, #fade 50, #title/#pause 60.
+
+   v4 HUD ZONES (no two overlap; y measured from the top at 1280×720 / 1920×1080, x at 1280 wide)
+   ┌──────────────────────────┬──────────────────────────────────────────────┬─────────────────────────────┬──────────────┐
+   │ element                  │ anchor                                       │ 1280×720                    │ 1920×1080    │
+   ├──────────────────────────┼──────────────────────────────────────────────┼─────────────────────────────┼──────────────┤
+   │ LEFT COLUMN .hud-left    │ top 14, left 18, w 300, flex column, gap 10   │ x 18–318, y 14–≤434         │ y 14–≤794    │
+   │   objective .hud-obj     │   first (shrinks/clips if the column is full) │                             │              │
+   │   tip box   .hud-hint    │   second, always below the tracker            │                             │              │
+   │ compass + degrees        │ top 14, centre, w 520                        │ x 380–900, y 14–70          │ y 14–70      │
+   │ BANNERS .hud-banners     │ top 80, centre, w 380: rescue then storm     │ x 450–830, y 80–~200        │ y 80–~200    │
+   │ clock card               │ top 14, right 16                             │ x ~1074–1264, y 14–~80      │ y 14–~80     │
+   │ journal badge            │ top 92, right 16                             │ y 92–118                    │ y 92–118     │
+   │ TOASTS .hud-toasts       │ top 124, right 16, w 330, one flex column,   │ x 934–1264, y 124–≤480      │ y 124–≤480   │
+   │                          │ ≤ 4 visible (queue in hud.js), newest last   │                             │              │
+   │ crosshair                │ centre                                       │ y 349–371                   │ y 529–551    │
+   │ CENTRE COLUMN .hud-center│ top 50%+28, centre, flex column, gap 8       │ y 388–≤470                  │ y 568–≤650   │
+   │   prompt .hud-prompt     │   first (hidden during the bite + fight)      │                             │              │
+   │   fishing .hud-fish      │   second, w 280 (only while fishing)          │ x 500–780                   │              │
+   │ SUBTITLE .hud-subtitle   │ bottom 126 (bottom 180 aboard: #hud.hud-veh) │ y ≥530–594 (≥476–540 aboard)│ y ≥856–954   │
+   │                          │ ≤ 2 lines (font ≤ 22px when ≤ 800 px tall)   │                             │              │
+   │ VEHICLE .hud-vehicle     │ bottom 122, centre, w ≤ 540 (hotbar column)  │ y ~552–598                  │ y ~912–958   │
+   │ hotbar + item name       │ bottom 16, centre, w 548                     │ x 366–914, y 607–704        │ y 967–1064   │
+   │ pickup feed              │ left 50%+280, bottom 26, ≤ 5 lines           │ x ≥ 920, y ≥ 554–694        │ y ≥ 914      │
+   │ STATS card (+ breath bar │ bottom 18, left 18, w 270; breath + chips    │ x 18–288, y ≥ 442–702       │ y ≥ 802–1062 │
+   │   + chips row, in flow)  │   grow upward inside the card, never on bars │                             │              │
+   └──────────────────────────┴──────────────────────────────────────────────┴─────────────────────────────┴──────────────┘
+   Not HUD-owned: story overlays (src/story), the multiplayer chat (src/net), the title screen (#title, src/style.css). */
 #hud {
   position: static;
   font-family: var(--font);
@@ -454,11 +481,22 @@ body.debug .hud-stats {
   transform: scale(0.55);
   background: var(--accent);
 }
-.hud-prompt {
+/* v4: centre column under the crosshair: the prompt, then the fishing widget */
+.hud-center {
   position: absolute;
   left: 50%;
   top: calc(50% + 28px);
   transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.hud-prompt.off,
+.hud-prompt:empty {
+  display: none;
+}
+.hud-prompt {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -630,7 +668,7 @@ body.debug .hud-stats {
 .hud-toasts {
   position: fixed;
   right: 16px;
-  top: 120px;
+  top: 124px;
   width: 330px;
   display: flex;
   flex-direction: column;
@@ -699,7 +737,7 @@ body.debug .hud-stats {
 .hud-subtitle {
   position: fixed;
   left: 50%;
-  bottom: 140px;
+  bottom: 126px;
   transform: translateX(-50%);
   max-width: min(900px, 86vw);
   z-index: 55;
@@ -721,12 +759,20 @@ body.debug .hud-stats {
 body.letterbox .hud-subtitle {
   bottom: 3.2vh;
 }
+/* v4: aboard a vehicle the subtitle sits above the vehicle panel */
+body:not(.letterbox) #hud.hud-veh .hud-subtitle {
+  bottom: 180px;
+}
+@media (max-height: 800px) {
+  .hud-subtitle {
+    font-size: clamp(16px, 1.9vw, 22px);
+  }
+}
 
 /* ── Hints ─────────────────────────────────────────────────────────────── */
 .hud-hint {
-  position: absolute;
-  left: 18px;
-  top: 42%;
+  position: relative;
+  flex: none;
   width: 300px;
   padding: 12px 14px;
   display: flex;
@@ -1339,10 +1385,23 @@ body.letterbox .hud-subtitle {
   background: rgba(255, 107, 94, 0.16);
   border-color: rgba(255, 107, 94, 0.45);
 }
-.hud-obj {
+/* v4: left column: objective tracker, then the tip card (stacked, never overlapping) */
+.hud-left {
   position: absolute;
   top: 14px;
   left: 18px;
+  width: 300px;
+  max-height: calc(100vh - 300px); /* ends at 100vh − 286: clear of the stats card */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.hud-obj {
+  position: relative;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
   width: 270px;
   padding: 10px 13px 11px;
   display: none;
@@ -1608,10 +1667,10 @@ body.letterbox .hud-subtitle {
 .hud-vehicle {
   position: absolute;
   left: 50%;
-  bottom: 104px;
+  bottom: 122px;
   transform: translateX(-50%);
   display: none;
-  max-width: min(620px, calc(100vw - 32px));
+  max-width: min(540px, calc(100vw - 32px)); /* v4: inside the hotbar's column, clear of the pickup feed */
   padding: 7px 14px 8px;
   text-align: center;
 }
@@ -1632,9 +1691,107 @@ body.letterbox .hud-subtitle {
 }
 @media (max-width: 900px) {
   .hud-vehicle {
-    bottom: 92px;
+    bottom: 110px;
   }
   .veh-title {
     white-space: normal;
+  }
+}
+
+/* ── v4: fishing widget (second in .hud-center, under the prompt) ──────── */
+.hud-fish {
+  display: none;
+  width: 280px;
+  padding: 7px 12px 7px;
+  text-align: center;
+  font-size: 12px;
+}
+.hud-fish.show {
+  display: block;
+}
+.fish-phase {
+  font-size: 13.5px;
+  font-weight: 600;
+  text-shadow: 0 1px 2px #000;
+}
+.hud-fish.bite .fish-phase {
+  color: var(--accent);
+  font-size: 15px;
+  animation: hud-fish-pulse 0.5s ease-in-out infinite alternate;
+}
+.hud-fish.run .fish-phase {
+  color: var(--hud-warn);
+}
+.hud-fish.landed .fish-phase {
+  color: var(--hud-good);
+}
+.hud-fish.lost .fish-phase {
+  color: var(--ink-dim);
+}
+.fish-bars {
+  display: none;
+  margin-top: 5px;
+}
+.hud-fish.fight .fish-bars {
+  display: grid;
+  gap: 4px;
+}
+.fish-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fish-lbl {
+  width: 38px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: right;
+  color: var(--ink-dim);
+}
+.fish-bar {
+  flex: 1;
+  height: 7px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.12);
+}
+.fish-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 0.08s linear, background-color 0.25s ease;
+}
+.fish-fill.prog {
+  background: var(--hud-cold);
+}
+.fish-fill.ok {
+  background: var(--hud-good);
+}
+.fish-fill.warn {
+  background: var(--hud-warn);
+}
+.fish-fill.hot {
+  background: var(--hud-bad);
+}
+.fish-fill.pulse {
+  animation: hud-fish-pulse 0.28s ease-in-out infinite alternate;
+}
+.fish-foot {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.fish-foot:empty {
+  display: none;
+}
+@keyframes hud-fish-pulse {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.55;
   }
 }

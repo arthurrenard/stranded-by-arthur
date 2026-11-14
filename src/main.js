@@ -92,6 +92,7 @@ const ctx = {
     sheltered: false, // D: under a shelter roof (computed from ctx.shelters)
     nearFire: 0, // D: 0..1 warmth from the nearest heat source
     sleeping: false,
+    typing: false, // multiplayer chat input open: the pointer is free but the world keeps running
     godMode: false,
     gravityScale: 1, // F easter egg (moon gravity) multiplies gravity
     speedScale: 1,
@@ -285,7 +286,7 @@ function wireOverlays() {
   });
   events.on('input:unlock', () => {
     if (DEBUG) return; // automation-friendly: never auto-pause in debug mode
-    if (ctx.state === 'playing' && !ctx.ui.menuOpen && !ctx.flags.cinematic) {
+    if (ctx.state === 'playing' && !ctx.ui.menuOpen && !ctx.flags.cinematic && !ctx.flags.typing) {
       ctx.state = 'paused';
       $('pause').classList.remove('hidden');
     }
@@ -342,7 +343,7 @@ function tick(dt, rawDt = dt, render = true) {
   }
 
   // Fallback: lost pointer lock while playing (e.g. menu closed outside a gesture)
-  if (!DEBUG && ctx.state === 'playing' && !ctx.ui.menuOpen && !ctx.flags.cinematic && !ctx.input.locked) {
+  if (!DEBUG && ctx.state === 'playing' && !ctx.ui.menuOpen && !ctx.flags.cinematic && !ctx.flags.typing && !ctx.input.locked) {
     unlockedFor += dt;
     if (unlockedFor > 0.4) {
       ctx.state = 'paused';

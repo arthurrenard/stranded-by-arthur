@@ -84,6 +84,7 @@ export function create(ctx) {
   };
 
   let ws = null, want = null, intentional = false, attempts = 0, connectTimer = 0, reconnectTimer = 0;
+  let started = false, reloading = false; // 'game:start' seen · a difficulty reload is pending
   let ui = null; // ./netUI.js instance
   const els = {};
   let panelDirty = true, panelAcc = 0;
@@ -186,7 +187,54 @@ export function create(ctx) {
     api.id = null;
     clock.err = 0;
     restoreScale();
+    syncSkipGuard();
     refreshPanel();
+  }
+
+  // ── Clients can't skip time (sleep, building, voyages): the host's clock rules ──
+  let skipGuard = null; // { T, orig, fn } while installed
+  function syncSkipGuard() {
+    const T = ctx.time;
+    const need = api.connected && !api.isHost;
+    if (need && !skipGuard && T && typeof T.skipHours === 'function') {
+      const orig = T.skipHours;
+      const fn = function (h) {
+        // net's own hard clock sync runs with `applying` set; offline / host / reconnecting → pass through
+        if (applying || !api.connected || api.isHost) return orig.call(T, h);
+        toast("In multiplayer the host's clock rules: only the host can skip time", { icon: '⏳', kind: 'warn', key: 'net-skip' });
+        return false;
+      };
+      skipGuard = { T, orig, fn };
+      T.skipHours = fn;
+    } else if (!need && skipGuard) {
+      if (skipGuard.T.skipHours === skipGuard.fn) skipGuard.T.skipHours = skipGuard.orig;
+      skipGuard = null; // if someone wrapped on top, our wrapper stays but passes through (it checks the state live)
+    }
+  }
+
+  // ── Joining a running game on another difficulty: the raft plan is already placed, so reload on the host's ──
+  function reloadForDifficulty(m) {
+    const d = m.difficulty;
+    toast(`The host plays on ${d}: reloading to join on the same difficulty…`, { icon: '⚖️', kind: 'warn', duration: 6, key: 'net-diff' });
+    const server = want?.server || api.server;
+    intentional = true;
+    want = null;
+    reloading = true;
+    closeSocket();
+    dropRoom(true);
+    setOffline();
+    let url = null;
+    try {
+      const u = new URL(location.href);
+      u.searchParams.set('difficulty', d);
+      if (server) u.searchParams.set('server', server);
+      u.searchParams.set('room', m.room);
+      u.searchParams.set('name', api.name);
+      u.searchParams.set('skipintro', '1');
+      u.searchParams.set('mpdiff', d);
+      url = u.toString();
+    } catch (_) {}
+    if (url) setTimeout(() => location.replace(url), 1800);
   }
   function updateUrl(room) {
     if (!hasDOM || typeof history === 'undefined' || !history.replaceState) return;
@@ -233,6 +281,7 @@ export function create(ctx) {
     for (const p of players.values()) p.avatar?.dispose();
     players.clear();
     api.connected = false;
+    syncSkipGuard();
     if (was && !silent) {
       ev.emit('net:disconnected', {});
       ui?.system?.('Disconnected.');
@@ -389,6 +438,7 @@ export function create(ctx) {
           clock.err = 0;
           restoreScale();
         } else ui?.system?.(`${nameOf(m.id)} is now the host.`);
+        syncSkipGuard();
         ev.emit('net:host', { id: m.id });
         panelDirty = true;
         break;
@@ -423,6 +473,13 @@ export function create(ctx) {
     if (set) for (const fn of set) fn(m);
   }
   function onWelcome(m) {
+    const hostDiff = !m.isHost && typeof m.difficulty === 'string' ? m.difficulty : null;
+    const mismatch = !!(hostDiff && ctx.difficulty?.id && hostDiff !== ctx.difficulty.id);
+    // Mid-game: don't hot-switch (the raft parts are placed for this plan). Reload once on the host's difficulty;
+    // ?mpdiff=<host> (written only by that reload) means we already did → just warn (no reload loop).
+    if (mismatch && started && hasDOM && CONFIG.difficulty?.presets?.[hostDiff] && params.get('mpdiff') !== hostDiff) {
+      return reloadForDifficulty(m);
+    }
     api.id = m.id;
     api.room = m.room;
     api.isHost = !!m.isHost;
@@ -430,6 +487,7 @@ export function create(ctx) {
     api.connected = true;
     api.mode = api.isHost ? 'host' : 'client';
     attempts = 0;
+    syncSkipGuard();
     if (want) want.room = m.room; // reconnects rejoin by code
     for (const p of m.players || []) addPlayer(p.id, p.name);
     refreshPanel();
@@ -441,8 +499,9 @@ export function create(ctx) {
     } else {
       toast(`Joined session ${m.room} · ${players.size + 1} players.`, { kind: 'good' });
       ui?.system?.(`Joined session ${m.room}.`);
-      if (m.difficulty && ctx.difficulty?.id && m.difficulty !== ctx.difficulty.id) {
-        const r = ctx.debug?.difficulty?.(m.difficulty);
+      if (mismatch && started) toast(`The host plays on ${hostDiff}.`, { icon: '⚖️', kind: 'warn', duration: 6 });
+      else if (mismatch) {
+        const r = ctx.debug?.difficulty?.(m.difficulty); // before 'game:start' (title screen) a switch is safe
         if (r?.id === m.difficulty || ctx.difficulty?.id === m.difficulty) toast(`Difficulty switched to ${m.difficulty} to match the host.`, { icon: '⚖️', kind: 'warn', duration: 6 });
         else toast(`The host plays on ${m.difficulty}.`, { icon: '⚖️', kind: 'warn' });
       }
@@ -712,14 +771,17 @@ export function create(ctx) {
   function autoJoin() {
     const room = normalizeRoomCode(params.get('room'));
     const server = normalizeServer(params.get('server')) || normalizeServer(CONFIG.net?.defaultServer);
-    if (room && server && !api.connected && !want) join(room, params.get('name') || api.name, server);
+    if (room && server && !api.connected && !want && !reloading) join(room, params.get('name') || api.name, server);
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
   function init() {
     wireRelay();
     wirePanel();
-    ev.on('game:start', autoJoin);
+    ev.on('game:start', () => {
+      started = true;
+      autoJoin();
+    });
     if (hasDOM) {
       import('./netUI.js')
         .then((m) => {
