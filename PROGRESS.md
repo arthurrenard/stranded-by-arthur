@@ -76,5 +76,8 @@ a Bella message-in-a-bottle easter egg.
   - Perf profile at the spawn: 231 calls / 2.67 M tris; trees ≈ 1.4 M tris (71 calls), grass 305k, terrain 320k → wave-2 target: tree LOD.
   - Hosting (searched 2026-11-21): Fly.io shared-cpu-1x 256 MB ≈ $2.19/mo + egress; Railway Hobby $5/mo incl. $5 usage.
   LESSON: at most 2 agents at a time now, with narrow scopes.
-- [ ] Wave 2 (2 agents): D aesthetics+wind, E optimization
+- [x] Wave 1 finished (run wf_8ad030be-b01 retried): net UI/docs/tests + HUD fishing widget/toast queue/zones. Two-tab LOCAL multiplayer
+  test passed (2026-11-21): create room → join by URL → avatar visible at the right spot → harvest synced (driftwood:2) → chat relayed.
+- [~] Wave 2 (2 agents): D aesthetics (colors/materials/lighting/post FX/HUD skin/avatar look), E optimization (tree LOD, shadow
+  casters, grass, quality presets + adaptive resolution in NEW src/gfx/quality.js → orchestrator wires it in main.js)
 - [ ] Integrate + playtest, commit + push; hosting instructions to the user
