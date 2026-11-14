@@ -62,6 +62,12 @@ must not fall apart, camera must not fall through) + more impressive animations;
 stone circle, also during aurora/meteors); stone runes interactable at night with a significant unlock (→ The Giant's Road causeway);
 a Bella message-in-a-bottle easter egg.
 - [x] Core: fish items, coconut nerf, CONFIG.fishing/net + keys, fishing/net stubs wired, #mp pause panel, SPEC §12
-- [ ] Wave 1 (3 agents): A cinematics+secrets, B multiplayer, C fishing+HUD. Check: `grep -l "// STUB" -r src`
+- [~] Wave 1 (run wf_c8925b6e-3ba) was CUT OFF by usage limits after 1.27M tokens. Real state, from the code, not the logs:
+  - A cinematics: intro crash fix DONE; summitShot.js, causeway.js, eggRunes.js, Bella wired in eastereggs.js (needs a browser check).
+  - B multiplayer: protocol.js, server/ (index.js, Dockerfile, fly.toml), net.js (759 lines), avatar.js, world-sync hooks DONE.
+    MISSING: netUI.js + net.css (chat/player list), docs/MULTIPLAYER.md, net tests.
+  - C fishing+HUD: fishing-logic.js + fishing.js DONE. MISSING: HUD fishing widget, overlap audit + toast queue, egg total 9 in the HUD.
+  - Orchestrator TODO: Esc double-pause fix, coconut KO (35 % death, else 10 % hp + 4 h knock-out + 2 h fatigue), Space guard while fishing.
+  LESSON: at most 2 agents at a time now, with narrow scopes.
 - [ ] Wave 2 (2 agents): D aesthetics+wind, E optimization
 - [ ] Integrate + playtest, commit + push; hosting instructions to the user

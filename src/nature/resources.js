@@ -136,6 +136,7 @@ export function create(ctx) {
   const geoRand = ctx.rng.fork('resources-geo');
   const kinds = {}; // key -> runtime kind
   const regrowing = new Set();
+  const byId = new Map(); // v4 (net): stable per-instance id 'kind:index' -> inst (same seed => same ids on every client)
   const anims = new Map(); // inst -> t (pop animation)
   const touched = new Set(); // meshes whose instance buffers need upload this frame
   const drops = [];
@@ -231,7 +232,9 @@ export function create(ctx) {
       slot: -1,
       handle: null,
       data: opts.data ?? null,
+      rid: k.key + ':' + k.instances.length,
     };
+    byId.set(inst.rid, inst);
     _m4.toArray(inst.base);
     if (k.tints) _c.set(k.tints[Math.floor(rand() * k.tints.length)]);
     else {
@@ -488,8 +491,30 @@ export function create(ctx) {
       ctx.ui?.flash?.('rgba(255,150,90,0.22)', 0.35);
       ctx.ui?.toast?.('Ouch! The nettles sting your fingers.', { icon: '🌿', kind: 'warn', duration: 2.5 });
     }
-    ctx.events.emit('harvest', { id: k.item, n: added, kind: k.key });
-    for (const [id, got] of gifts) ctx.events.emit('harvest', { id, n: got, kind: k.key });
+    ctx.events.emit('harvest', { id: k.item, n: added, kind: k.key, rid: inst.rid });
+    for (const [id, got] of gifts) ctx.events.emit('harvest', { id, n: got, kind: k.key, rid: inst.rid });
+  }
+
+  /** v4 (net): a remote player harvested instance `rid`: hide it and start its regrow timer (no loot, no toast). */
+  function hideById(rid) {
+    const inst = byId.get(rid);
+    if (!inst || inst.harvestedAt >= 0) return false;
+    const k = inst.kind;
+    inst.harvestedAt = now();
+    inst.regrowH = rr(k.regrow[0], k.regrow[1]);
+    regrowing.add(inst);
+    anims.set(inst, 0);
+    if (hoverInst === inst) hoverInst = null;
+    burst(inst.x, inst.y + k.iy * 0.8, inst.z, k.burst ?? 0x88aa55, 10);
+    return true;
+  }
+  /** v4 (net): bring instance `rid` back now (remote regrow / resync). */
+  function regrowById(rid) {
+    const inst = byId.get(rid);
+    if (!inst || inst.harvestedAt < 0) return false;
+    restore(inst);
+    dirty = true;
+    return true;
   }
 
   // ── Particle bursts (pooled Points) ────────────────────────────────────
@@ -1076,6 +1101,9 @@ export function create(ctx) {
     nearest,
     counts,
     regrowAll,
+    /** v4 (net): stable per-instance ids ('kind:index', also on 'harvest' payloads as `rid`). */
+    hideById,
+    regrowById,
     get kinds() {
       return kinds;
     },

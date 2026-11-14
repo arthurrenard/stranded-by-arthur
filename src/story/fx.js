@@ -1,4 +1,4 @@
-// Story visual effects (Builder F): pooled particles, a fake-volumetric light cone, meteors and
+// Story visual effects (Builder F): pooled particles, flying planks (v4), a fake-volumetric light cone, meteors and
 // aurora ribbons. All shaders are ShaderMaterials; world-space ones support scene fog (additive
 // effects fade their alpha by the fog factor instead of mixing toward the fog color, which would
 // brighten them). Sky effects (meteors, aurora) deliberately use fog:false: they live "at infinity".
@@ -144,6 +144,115 @@ export function createParticles({ count = 256, additive = false } = {}) {
       alpha.fill(0);
       aAlpha.needsUpdate = true;
       api.alive = 0;
+    },
+  };
+  return api;
+}
+
+// ── Flying planks (InstancedMesh pool, v4 intro crash) ───────────────────
+/**
+ * createPlanks(n) -> { mesh, spawn(x, y, z, vx, vy, vz, life, scale), update(dt, { gravity, floorY, drag }), clear(), alive }
+ * Tumbling wooden boards. Below floorY (the sea) they stop falling and float, slowly settling flat.
+ */
+export function createPlanks(n = 28) {
+  const geo = new THREE.BoxGeometry(1, 0.06, 0.2);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x8a6a44, roughness: 0.92, metalness: 0, flatShading: true });
+  const mesh = new THREE.InstancedMesh(geo, mat, n);
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  mesh.frustumCulled = false;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  const pos = new Float32Array(n * 3), vel = new Float32Array(n * 3), rot = new Float32Array(n * 3), rv = new Float32Array(n * 3);
+  const life = new Float32Array(n), scl = new Float32Array(n), wet = new Uint8Array(n);
+  const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
+  const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+  for (let i = 0; i < n; i++) mesh.setMatrixAt(i, zero);
+  mesh.instanceMatrix.needsUpdate = true;
+  let cursor = 0;
+  const api = {
+    mesh,
+    alive: 0,
+    spawn(x, y, z, vx, vy, vz, lifeS = 6, scale = 1) {
+      const i = cursor;
+      cursor = (cursor + 1) % n;
+      const j = i * 3;
+      pos[j] = x;
+      pos[j + 1] = y;
+      pos[j + 2] = z;
+      vel[j] = vx;
+      vel[j + 1] = vy;
+      vel[j + 2] = vz;
+      rot[j] = Math.random() * 6.28;
+      rot[j + 1] = Math.random() * 6.28;
+      rot[j + 2] = Math.random() * 6.28;
+      rv[j] = (Math.random() - 0.5) * 14;
+      rv[j + 1] = (Math.random() - 0.5) * 10;
+      rv[j + 2] = (Math.random() - 0.5) * 14;
+      life[i] = lifeS;
+      scl[i] = scale;
+      wet[i] = 0;
+    },
+    update(dt, o = {}) {
+      const gravity = o.gravity ?? 9.8, floorY = o.floorY ?? -Infinity, drag = o.drag ?? 0.15;
+      const k = Math.exp(-drag * dt), kw = Math.exp(-2.2 * dt);
+      let alive = 0;
+      for (let i = 0; i < n; i++) {
+        if (life[i] <= 0) continue;
+        life[i] -= dt;
+        const j = i * 3;
+        if (life[i] <= 0) {
+          mesh.setMatrixAt(i, zero);
+          continue;
+        }
+        alive++;
+        if (!wet[i]) {
+          vel[j] *= k;
+          vel[j + 1] = vel[j + 1] * k - gravity * dt;
+          vel[j + 2] *= k;
+          rot[j] += rv[j] * dt;
+          rot[j + 1] += rv[j + 1] * dt;
+          rot[j + 2] += rv[j + 2] * dt;
+        } else {
+          // floating: drift, settle flat, bob a little
+          vel[j] *= kw;
+          vel[j + 2] *= kw;
+          vel[j + 1] = 0;
+          rot[j] *= kw;
+          rot[j + 2] *= kw;
+          rot[j + 1] += rv[j + 1] * 0.15 * dt;
+        }
+        pos[j] += vel[j] * dt;
+        pos[j + 1] += vel[j + 1] * dt;
+        pos[j + 2] += vel[j + 2] * dt;
+        if (pos[j + 1] < floorY) {
+          pos[j + 1] = floorY;
+          if (!wet[i]) {
+            wet[i] = 1;
+            rot[j] = Math.sin(rot[j]) * 0.4;
+            rot[j + 2] = Math.sin(rot[j + 2]) * 0.4;
+          }
+        }
+        const fade = Math.min(1, life[i] / 0.6);
+        _e.set(rot[j], rot[j + 1], rot[j + 2]);
+        _q.setFromEuler(_e);
+        _p.set(pos[j], pos[j + 1] + (wet[i] ? 0.02 : 0), pos[j + 2]);
+        _s.setScalar(scl[i] * fade);
+        _m.compose(_p, _q, _s);
+        mesh.setMatrixAt(i, _m);
+      }
+      api.alive = alive;
+      mesh.instanceMatrix.needsUpdate = true;
+    },
+    clear() {
+      life.fill(0);
+      for (let i = 0; i < n; i++) mesh.setMatrixAt(i, zero);
+      mesh.instanceMatrix.needsUpdate = true;
+      api.alive = 0;
+    },
+    dispose() {
+      mesh.parent?.remove(mesh);
+      geo.dispose();
+      mat.dispose();
     },
   };
   return api;

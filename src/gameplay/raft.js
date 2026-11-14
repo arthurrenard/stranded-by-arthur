@@ -692,6 +692,19 @@ export function create(ctx) {
     if (!complete) debugComplete();
     startCine();
   }
+  /** v4 (net): a remote player finished stages: jump to `index` completed stages (never backwards). */
+  function applyStage(index) {
+    if (!started) start();
+    if (!plan) return false;
+    const n = Math.max(0, Math.min(plan.stages.length, Math.floor(Number(index) || 0)));
+    if (n <= stageIndex) return false;
+    stageIndex = n;
+    complete = stageIndex >= plan.stages.length;
+    refreshBoat();
+    dirty = true;
+    if (complete) onComplete();
+    return true;
+  }
 
   // ── lifecycle ────────────────────────────────────────────────────────────
   const api = {
@@ -727,6 +740,8 @@ export function create(ctx) {
     debugGiveAll,
     debugComplete,
     debugLaunch,
+    /** v4 (net): remote raft:stage → jump to `index` completed stages. */
+    applyStage,
     init() {
       try {
         siteInfo = findSite(ctx.world);

@@ -1,0 +1,38 @@
+# Fly.io config for the STRANDED relay server. Deploy from the repository root (the Dockerfile needs src/):
+#   fly launch --no-deploy --copy-config --config server/fly.toml   (first time: pick a name + region)
+#   fly deploy --config server/fly.toml --dockerfile server/Dockerfile .
+# The game then connects to wss://<app-name>.fly.dev (set CONFIG.net.defaultServer or use ?server=).
+app = "stranded-relay"
+primary_region = "cdg"
+
+[build]
+  dockerfile = "server/Dockerfile"
+
+[env]
+  PORT = "8787"
+  MAX_PLAYERS = "8"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 200
+    hard_limit = 250
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  cpus = 1

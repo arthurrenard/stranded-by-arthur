@@ -3,6 +3,7 @@
 // lit lower lip) on a partial open cylinder that hugs the trunk. Node-safe: without a DOM the texture is
 // null and the mesh is invisible (geometry still builds, so it can be smoke-tested).
 import * as THREE from 'three';
+import { drawGlyph } from './eggRunes.js';
 import { canvasTexture, prng } from './models.js';
 
 const PI = Math.PI;
@@ -29,7 +30,8 @@ function drawLayer(g, shapes, dx, dy, style) {
   }
 }
 
-export function drawCarving(g, w, h) {
+export function drawCarving(g, w, h, glyphs = null) {
+  const tf = glyphs ? 0.74 : 1; // v4: with a glyph row, the inscription moves up to make room
   const r = prng(4242);
   g.clearRect(0, 0, w, h);
   // 1. A smoothed, slightly paler patch of bark where the knife worked (soft edges blend into the trunk).
@@ -48,7 +50,7 @@ export function drawCarving(g, w, h) {
   const wAR = g.measureText('A.R.').width;
   const hs = 82, gap = 26;
   const line1W = wAR + gap + hs;
-  const x1 = (w - line1W) / 2, y1 = h * 0.43;
+  const x1 = (w - line1W) / 2, y1 = h * 0.43 * tf;
   let size2 = 80;
   g.font = `bold ${size2}px Georgia, "Times New Roman", serif`;
   const tw = g.measureText('this island').width;
@@ -59,13 +61,27 @@ export function drawCarving(g, w, h) {
   const shapes = [
     { text: 'A.R.', x: x1, y: y1, font: f1 },
     { heart: true, x: x1 + wAR + gap + hs / 2, y: y1 - 34, s: hs },
-    { text: 'this island', x: (w - w2) / 2, y: h * 0.8, font: f2 },
+    { text: 'this island', x: (w - w2) / 2, y: h * 0.8 * tf, font: f2 },
   ];
 
   // 3. Inset look: pale lower lip, dark upper groove wall, then the exposed inner wood on top.
   drawLayer(g, shapes, 2, 4, 'rgba(214,186,140,0.55)');
   drawLayer(g, shapes, -1, -3, 'rgba(26,16,9,0.92)');
   drawLayer(g, shapes, 0, 0, '#b48a5a');
+
+  // 3b. v4 clue: four small rune glyphs cut in a row under the initials (same inset look, stroked).
+  if (glyphs && glyphs.length) {
+    const n = glyphs.length, gh = h * 0.15, gw = gh * 0.72, gap = gw * 0.55;
+    const x0 = (w - (n * gw + (n - 1) * gap)) / 2, y0 = h * 0.79;
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    const layers = [[2, 4, 'rgba(214,186,140,0.55)', 9], [-1, -3, 'rgba(26,16,9,0.92)', 9], [0, 0, '#b48a5a', 7]];
+    for (const [dx, dy, col, lw] of layers) {
+      g.strokeStyle = col;
+      g.lineWidth = lw;
+      for (let k = 0; k < n; k++) drawGlyph(g, glyphs[k], x0 + k * (gw + gap) + dx, y0 + dy, gw, gh);
+    }
+  }
 
   // 4. Grain + knife chatter, only inside the letters (source-atop keeps strokes on existing alpha).
   g.save();
@@ -113,8 +129,8 @@ export function drawCarving(g, w, h) {
  * radians and `height` m, centered at local y = 0. Rotate it with rotation.y = atan2(dx, dz) to face (dx, dz).
  * u grows toward the viewer's right (x = r·sinθ, θ increasing), v = 1 at the top: the text reads correctly.
  */
-export function createCarving({ radius = 0.6, height = 0.6, arc = 1.45 } = {}) {
-  const tex = canvasTexture(512, Math.round((512 * height) / (radius * arc)), drawCarving);
+export function createCarving({ radius = 0.6, height = 0.6, arc = 1.45, glyphs = null } = {}) {
+  const tex = canvasTexture(512, Math.round((512 * height) / (radius * arc)), (g, w, h) => drawCarving(g, w, h, glyphs));
   const geo = new THREE.CylinderGeometry(radius, radius, height, 24, 1, true, -arc / 2, arc);
   const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff,

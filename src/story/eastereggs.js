@@ -7,7 +7,12 @@
 //   5 konami    ↑↑↓↓←→←→BA -> moon gravity (flags.gravityScale = 0.3) for 60 s (repeatable, counts once)
 //   6 carving   "A.R. ♥ this island" carved in the landmark oak, facing Mirror Lake
 //   7 duck      rubber duck drifting on Mirror Lake; it quacks, and the lake quacks back 1.2 s later
-// Pure helpers live in eggLogic.js (tests/eastereggs.test.mjs). All delays run on update(dt) timers (pause-safe).
+//   8 bella     (v4) a second bottle on the south-west beach near landmarks.riverMouth: "My heart longs for you. I love you Bella"
+//   9 causeway  (v4) the rune puzzle: touch the 4 seeded "storm" runes of the stone circle at night (22:00–05:00; clues on the
+//               carved tree, the tally rock and a torn logbook page at the fishing hut door) -> The Giant's Road (causeway.js)
+// v4 also: the summit survey cinematic (summitShot.js, driven from here; ctx.eastereggs.survey()), ctx.eastereggs.showActive.
+// Pure helpers live in eggLogic.js / eggRunes.js (tests/eastereggs.test.mjs, tests/story.test.mjs). All delays run on
+// update(dt) timers (pause-safe).
 import * as THREE from 'three';
 import {
   createBottle,
@@ -18,10 +23,14 @@ import {
   createRubberDuck,
   createGoldenButterfly,
   createArm,
+  createNoteSign,
 } from './models.js';
 import { createMeteors, createAurora } from './fx.js';
 import { createCarving } from './eggCarving.js';
 import * as L from './eggLogic.js';
+import * as R from './eggRunes.js';
+import * as Summit from './summitShot.js';
+import * as Causeway from './causeway.js';
 
 const PI = Math.PI;
 const TAU = PI * 2;
@@ -88,6 +97,28 @@ export function create(ctx) {
   const H = (x, z) => ctx.world?.heightAt?.(x, z) ?? 0;
   const seaLevel = () => ctx.config?.world?.seaLevel ?? 0;
 
+  // v4: the seeded rune solution + the clue texts shared by the carved tree, the tally rock and the hut note
+  const runeRand = ctx.rng?.fork?.('runes') ?? ((i) => () => L.hash01(++i, 7))(0);
+  const runes = {
+    solution: R.pickSolution(runeRand),
+    lit: new Set(),
+    glow: new Float32Array(7),
+    wrongT: 0,
+    reject: 0,
+    solved: false,
+    mats: null,
+    halos: [],
+    haloMeshes: null,
+    beam: null,
+    beamMat: null,
+    stones: [],
+    blaze: null,
+    beamK: 0,
+  };
+  const CLUES = R.clueTexts(runes.solution);
+  const clue = (id, title, text, icon = 'ᚱ') => ctx.ui?.markJournal?.('clue:' + id, { title, text, icon });
+  let summit = null, causeway = null;
+
   // ── 1. Message in a bottle ──────────────────────────────────────────
   const BOTTLE_LINES = [
     ['“To whoever washes up next: you are not the first.”', 4.5],
@@ -142,12 +173,69 @@ export function create(ctx) {
       },
     });
   }
+  /** Bob a bottle { outer, inner, base, wet } on the surf (or barely, on dry sand). */
+  function bob(b, ph = 0) {
+    if (!b.outer) return;
+    const a = b.wet ? 0.035 : 0.006;
+    b.outer.position.y = b.base + Math.sin(vt * 1.7 + ph) * a + Math.sin(vt * 0.63 + 1 + ph) * a * 0.5;
+    b.inner.rotation.z = 1.4 + Math.sin(vt * 1.3 + ph) * (b.wet ? 0.09 : 0.01);
+    b.inner.rotation.x = Math.sin(vt * 0.9 + 0.4 + ph) * (b.wet ? 0.12 : 0.01);
+  }
   function updateBottle() {
-    if (!bottle.outer) return;
-    const a = bottle.wet ? 0.035 : 0.006;
-    bottle.outer.position.y = bottle.base + Math.sin(vt * 1.7) * a + Math.sin(vt * 0.63 + 1) * a * 0.5;
-    bottle.inner.rotation.z = 1.4 + Math.sin(vt * 1.3) * (bottle.wet ? 0.09 : 0.01);
-    bottle.inner.rotation.x = Math.sin(vt * 0.9 + 0.4) * (bottle.wet ? 0.12 : 0.01);
+    bob(bottle, 0);
+    bob(bella, 2.1);
+  }
+
+  // ── 8 (v4). Bella's bottle: the south-west beach, 25 m along the coast from the river mouth ──
+  const BELLA_TEXT = 'My heart longs for you. I love you Bella';
+  const bella = { outer: null, inner: null, base: 0, wet: false };
+  function setupBella(RM) {
+    const d = Math.hypot(RM.x, RM.z) || 1;
+    const ox = RM.x / d, oz = RM.z / d; // seaward
+    const tx = -oz, tz = ox; // along the coast
+    const sea = seaLevel();
+    // 25 m from the mouth, on whichever side is dry low sand (not the river itself)
+    const beachy = (x, z) => {
+      const h = H(x, z);
+      return h > sea - 0.4 && h < 2.5 && !ctx.world?.waterAt?.(x, z)?.fresh ? 1 : 0;
+    };
+    let bx = RM.x + tx * 25, bz = RM.z + tz * 25;
+    if (beachy(bx, bz) < beachy(RM.x - tx * 25, RM.z - tz * 25)) {
+      bx = RM.x - tx * 25;
+      bz = RM.z - tz * 25;
+    }
+    // out into ankle-deep surf, else at the waterline
+    let m = 0;
+    for (let k = 0; k <= 24; k += 0.5) {
+      if (H(bx + ox * k, bz + oz * k) < sea - 0.12) {
+        m = k;
+        break;
+      }
+    }
+    const x = bx + ox * m, z = bz + oz * m;
+    const ground = H(x, z);
+    bella.wet = ground < sea - 0.03;
+    bella.base = bella.wet ? sea + 0.01 : ground + 0.07;
+    const { group } = createBottle();
+    group.rotation.z = 1.4;
+    bella.inner = group;
+    bella.outer = new THREE.Group();
+    bella.outer.position.set(x, bella.base, z);
+    bella.outer.rotation.y = Math.atan2(ox, oz) - 0.9;
+    bella.outer.add(group);
+    root.add(bella.outer);
+    register({
+      position: new THREE.Vector3(x, bella.base + 0.05, z),
+      radius: 2.4,
+      label: () => (found.has('bella') ? 'Read the message again' : 'Read the message'),
+      priority: 0.2,
+      onUse: () => {
+        ctx.ui?.subtitle?.(BELLA_TEXT, 6);
+        if (found.has('bella')) return;
+        ctx.ui?.markJournal?.('note:bella', { title: 'A message for Bella', text: BELLA_TEXT, icon: '💌' });
+        discover('bella', { text: `A bottle in the surf near the river mouth: “${BELLA_TEXT}”`, msg: BELLA_TEXT, icon: '💌' });
+      },
+    });
   }
 
   // ── 2. The castaway's camp ──────────────────────────────────────────
@@ -179,7 +267,7 @@ export function create(ctx) {
     const [lcx, lcz] = at(0.2, 0);
     collider({ x: lcx, z: lcz, r: 1.45, y0: gy - 1, y1: gy + 1.0, tag: 'egg-leanto' });
 
-    const rock = createTallyRock();
+    const rock = createTallyRock(runes.solution); // v4: the scratched rune row under the tally is a clue
     const [rx, rz] = at(-3.2, 0.9);
     const ry = H(rx, rz);
     rock.group.position.set(rx, ry - 0.15, rz);
@@ -224,7 +312,11 @@ export function create(ctx) {
       position: new THREE.Vector3(rx, ry + 0.6, rz),
       radius: 2.8,
       label: 'Count the marks',
-      onUse: () => ctx.ui?.subtitle?.('Forty-three marks scratched into the stone. “43 days.”', 4),
+      onUse: () => {
+        ctx.ui?.subtitle?.('Forty-three marks scratched into the stone. “43 days.”', 4);
+        after(4.2, () => ctx.ui?.subtitle?.(CLUES.tally, 6.5));
+        clue('tally', 'Glyphs on the tally rock', CLUES.tally, '🪨');
+      },
     });
   }
 
@@ -243,8 +335,159 @@ export function create(ctx) {
     root.add(sc.group);
     circle.runeMat = sc.runeMat;
     circle.glowMat = sc.glowMat;
+    runes.mats = sc.runeMats || [sc.runeMat];
+    runes.halos = sc.haloMats || [];
+    runes.haloMeshes = sc.group.children.filter((c) => c.userData?.mat);
+    runes.beam = sc.beam || null;
+    runes.beamMat = sc.beamMat || null;
+    runes.stones = sc.stones;
+    circleHook.x = S.x;
+    circleHook.z = S.z;
+    circleHook.y = circle.y;
+    circleHook.stones = sc.stones;
     for (const s of sc.stones) collider({ x: s.x, z: s.z, r: 0.62, y0: s.top - 6, y1: s.top, tag: 'egg-stone' });
     collider({ x: S.x, z: S.z, r: 1.2, y0: circle.y - 1, y1: circle.y + 0.27, tag: 'egg-altar' }); // step-up height
+    // v4: touch the runes at night (the puzzle); the rune plane sits ~1.35 m up the inner face of each stone
+    sc.stones.forEach((s, i) => {
+      const dx = S.x - s.x, dz = S.z - s.z, dl = Math.hypot(dx, dz) || 1;
+      register({
+        position: new THREE.Vector3(s.x + (dx / dl) * 0.75, s.top - 1.7, s.z + (dz / dl) * 0.75),
+        radius: 2.8,
+        label: () => (runes.lit.has(i) ? 'Touch the rune again' : 'Touch the rune'),
+        enabled: () => !runes.solved && R.inRuneNight(ctx.time?.hour ?? 12),
+        priority: 0.2,
+        onUse: () => touchRune(i),
+      });
+    });
+    // v4: the summit survey (first visit auto-plays; replay from the altar)
+    summit = Summit.create(ctx, { x: S.x, z: S.z, y: circle.y, r: S.r ?? 25 });
+    summit.init();
+  }
+
+  // ── 9 (v4). The rune puzzle -> The Giant's Road ─────────────────────
+  const circleHook = { x: 0, z: 0, y: 0, stones: [], setBlaze };
+  function stonePos(i) {
+    const s = runes.stones[i];
+    return s ? tmpV.set(s.x, s.top - 1.5, s.z) : undefined;
+  }
+  /** Driven by the causeway cinematic: per-stone blaze levels (Float32Array(7) | null) and the beam 0..1. */
+  function setBlaze(lit, beamK, t) {
+    runes.blaze = lit;
+    runes.beamK = beamK;
+    if (runes.beam) {
+      runes.beam.visible = beamK > 0.001;
+      const h = 1 + beamK * 260;
+      runes.beam.scale.y = h;
+      runes.beam.position.y = h / 2;
+      if (runes.beamMat) runes.beamMat.opacity = 0.8 * beamK * (0.85 + 0.15 * Math.sin(t * 9));
+    }
+  }
+  function touchRune(i) {
+    if (runes.solved || !playing()) return;
+    if (runes.lit.has(i)) runes.lit.delete(i);
+    else runes.lit.add(i);
+    runes.wrongT = 0;
+    ctx.audio?.play?.('chime', { volume: 0.9, rate: 0.8 + i * 0.07, position: stonePos(i) });
+    if (!found.has('causeway')) ctx.ui?.hint?.('runes', 'The rune glows under your hand. Which four face the storm?');
+    if (R.evaluate(runes.lit, runes.solution) === 'solved') solveRunes();
+  }
+  function rejectRunes() {
+    runes.lit.clear();
+    runes.wrongT = 0;
+    runes.reject = 1.2;
+    ctx.audio?.play?.('thunder', { volume: 0.35, rate: 0.6 });
+    ctx.audio?.play?.('impact', { volume: 0.5 });
+    ctx.ui?.subtitle?.('A low rumble runs through the plateau. The glow drains out of the stones.', 4);
+  }
+  function solveRunes() {
+    if (runes.solved) return;
+    runes.solved = true;
+    runes.wrongT = 0;
+    ctx.audio?.play?.('secret', { volume: 1 });
+    const done = () => {
+      ctx.ui?.markJournal?.('note:causeway', {
+        title: "The Giant's Road",
+        text: 'The four runes that face the storm lit together, and the sea gave up a road of stone from the launch beach to Tempest Isle. You can walk there now.',
+        icon: '🛤️',
+      });
+      discover('causeway', { text: 'The four storm-facing runes raised a stone causeway from the launch beach to Tempest Isle.', msg: "ACHIEVEMENT: The Giant's Road", icon: '🏆' });
+      ctx.ui?.toast?.('A stone road now joins Driftwood Isle to Tempest Isle. Walk it from the launch beach.', { icon: '🛤️', kind: 'story', duration: 8 });
+    };
+    const p = causeway?.solve?.();
+    if (p) p.then(done);
+    else {
+      causeway?.build?.();
+      done();
+    }
+  }
+  /** Rune materials: night glow (all 7), the lit ones brighter + halo, the reject flicker, the cinematic blaze. */
+  function updateRunes(dt, glow, pulse) {
+    const mats = runes.mats;
+    if (!mats) return;
+    if (ctx.state === 'playing' && !runes.solved) {
+      if (runes.lit.size && !R.inRuneNight(ctx.time?.hour ?? 12)) runes.lit.clear(); // dawn: the glows fade
+      if (R.evaluate(runes.lit, runes.solution) === 'wrong') {
+        runes.wrongT += dt;
+        if (runes.wrongT > R.WRONG_SET_SEC) rejectRunes();
+      } else runes.wrongT = 0;
+    }
+    if (runes.reject > 0) runes.reject = Math.max(0, runes.reject - dt);
+    const k = 1 - Math.exp(-dt * 4);
+    const flick = runes.reject > 0 ? 0.55 + 0.45 * Math.sin(vt * 40) : 1;
+    for (let i = 0; i < mats.length; i++) {
+      const blaze = runes.blaze ? runes.blaze[i] : 0;
+      const target = Math.max(blaze, runes.solved ? 0.55 : runes.lit.has(i) ? 1 : 0);
+      runes.glow[i] += (target - runes.glow[i]) * k;
+      const g = runes.glow[i];
+      const m = mats[i];
+      m.color.copy(RUNE_DAY).lerp(RUNE_NIGHT, Math.max(glow, g)).multiplyScalar((1 + (pulse - 1) * glow) * (1 + g * 1.6) * flick);
+      m.opacity = 0.7 + 0.3 * Math.max(glow, g);
+      const hm = runes.halos[i];
+      if (hm) {
+        hm.opacity = g * 0.8 * flick * (0.9 + 0.1 * Math.sin(vt * 5 + i * 1.3));
+        const hmesh = runes.haloMeshes?.[i];
+        if (hmesh) hmesh.visible = hm.opacity > 0.01;
+      }
+    }
+  }
+
+  // the logbook clue: a torn page nailed to a post beside the fishing hut's door (placed lazily: isle2 may fail)
+  const note = { placed: false };
+  function placeNote(frame, floorY) {
+    // the door spans v -1.45..-0.35 on the front wall (u = +D/2 = 2.0); the post stands just outside, beside it
+    const u = 2.0 + 0.55, v = -1.95;
+    const x = frame.x + u * frame.fx + v * frame.fz, z = frame.z + u * frame.fz - v * frame.fx;
+    const y = Number.isFinite(floorY) ? floorY : H(x, z);
+    const sign = createNoteSign(runes.solution);
+    sign.group.position.set(x, y, z);
+    sign.group.rotation.y = Math.atan2(frame.fx, frame.fz); // the page faces the way in
+    root.add(sign.group);
+    sign.group.updateMatrixWorld(true);
+    register({
+      position: sign.group.localToWorld(sign.paperPos.clone()),
+      radius: 2.4,
+      label: 'Read the weathered note',
+      priority: 0.1,
+      onUse: () => {
+        ctx.ui?.subtitle?.(CLUES.logbook, 7.5);
+        clue('logbook', "The fisherman's torn page", CLUES.logbook, '📜');
+      },
+    });
+    note.placed = true;
+  }
+  function updateNote() {
+    if (note.placed) return;
+    const hut = ctx.isle2?.hut;
+    if (hut?.frame) return placeNote(hut.frame, hut.floorY);
+    if (vt < 8) return; // give isle2 a moment, then fall back to the landmark (post facing the cove)
+    const lm = ctx.world?.landmarks || {};
+    if (!lm.isle2Hut) {
+      note.placed = true;
+      return;
+    }
+    const tgt = lm.isle2Cove || { x: 0, z: 0 };
+    const dx = tgt.x - lm.isle2Hut.x, dz = tgt.z - lm.isle2Hut.z, l = Math.hypot(dx, dz) || 1;
+    placeNote({ x: lm.isle2Hut.x, z: lm.isle2Hut.z, fx: dx / l, fz: dz / l }, lm.isle2Hut.y);
   }
   function startShower(countIt = true) {
     circle.t = 0;
@@ -294,9 +537,8 @@ export function create(ctx) {
     }
     const glow = clamp01(night * 0.9 + ev * 0.5);
     const pulse = 1 + ev * (0.6 + 0.3 * Math.sin(vt * 3.1));
-    circle.runeMat.color.copy(RUNE_DAY).lerp(RUNE_NIGHT, glow).multiplyScalar(1 + (pulse - 1) * glow);
-    circle.runeMat.opacity = 0.7 + 0.3 * glow;
-    circle.glowMat.opacity = night * 0.16 + ev * (0.42 + 0.12 * Math.sin(vt * 2.3));
+    updateRunes(dt, glow, pulse);
+    circle.glowMat.opacity = night * 0.16 + ev * (0.42 + 0.12 * Math.sin(vt * 2.3)) + runes.beamK * 0.5;
   }
   function checkCircle(p) {
     if (circle.t >= 0 || !circle.runeMat) return;
@@ -460,7 +702,7 @@ export function create(ctx) {
     const lake = ctx.world?.lakes?.[0] ?? ctx.world?.landmarks?.lake;
     const yaw = lake ? Math.atan2(lake.x - x, lake.z - z) : -PI / 2; // face Mirror Lake (west)
     const fx = Math.sin(yaw), fz = Math.cos(yaw);
-    const { mesh } = createCarving({ radius: trunkR + 0.015, height: 0.6, arc: Math.min(1.45, 1.15 / (trunkR + 0.015)) }); // ~1.15 m wide band
+    const { mesh } = createCarving({ radius: trunkR + 0.015, height: 0.6, arc: Math.min(1.45, 1.15 / (trunkR + 0.015)), glyphs: runes.solution }); // ~1.15 m wide band + the v4 rune row
     mesh.position.set(x, baseY + 1.4, z);
     mesh.rotation.y = yaw;
     root.add(mesh);
@@ -474,6 +716,8 @@ export function create(ctx) {
       },
       onUse: () => {
         ctx.ui?.subtitle?.('“A.R. ♥ this island”, carved deep into the bark. Your initials… but the cuts look years old.', 5.5);
+        after(5.7, () => ctx.ui?.subtitle?.(CLUES.carving, 6.5));
+        clue('carving', 'Marks under the initials', CLUES.carving, '🌳');
         discover('carving', { text: '“A.R. ♥ this island”, carved into the old oak facing Mirror Lake.', msg: 'Someone loved this island long before you.', icon: '🌳' });
       },
     });
@@ -535,6 +779,35 @@ export function create(ctx) {
   const api = {
     found,
     total: L.EGG_TOTAL,
+    /** v4: true while the stone circle's meteor shower / aurora runs (the survey shot keeps it on). */
+    get showActive() {
+      return circle.t >= 0 && circle.t < SHOWER_S;
+    },
+    /** v4: the summit survey cinematic -> Promise | null (summitShot.js). */
+    survey: (opts) => summit?.survey?.(opts) ?? null,
+    get surveyed() {
+      return !!summit?.surveyed;
+    },
+    /** v4: The Giant's Road (causeway.js). */
+    causeway: {
+      get built() {
+        return !!causeway?.built;
+      },
+      isOn: (x, z) => !!causeway?.isOn?.(x, z),
+    },
+    /** v4: rune puzzle state (debug / tests). */
+    runes: {
+      get solution() {
+        return runes.solution.slice();
+      },
+      get lit() {
+        return [...runes.lit];
+      },
+      get solved() {
+        return runes.solved;
+      },
+      names: () => R.solutionNames(runes.solution),
+    },
     init() {
       if (ready) return;
       ready = true;
@@ -546,6 +819,8 @@ export function create(ctx) {
       if (lm.meadow) safe('butterfly', () => setupButterfly(lm.meadow));
       if (lm.carvedTree) safe('carving', () => setupCarving(lm.carvedTree));
       if (lm.duck) safe('duck', () => setupDuck(lm.duck, ctx.world?.lakes?.[0]));
+      if (lm.riverMouth) safe('bella', () => setupBella(lm.riverMouth));
+      if (lm.launchBeach && lm.isle2Cove) safe('causeway', () => (causeway = Causeway.create(ctx, { from: lm.launchBeach, to: lm.isle2Cove, circle: circleHook })));
       offKey = ctx.input?.onKeyDown?.(onKey) || null;
     },
     update(dt) {
@@ -563,18 +838,34 @@ export function create(ctx) {
         }
       }
       const p = ctx.player?.position;
-      if (p && playing()) checkCircle(p);
+      if (p && playing()) {
+        checkCircle(p);
+        summit?.check?.(p);
+      }
       updateBottle();
       updateDuck(dt);
       updateCircle(dt);
       updateButterfly(dt, p);
       updateMoon(dt);
+      updateNote();
+      summit?.update?.(dt);
+      causeway?.update?.(dt);
     },
     /** Debug: start the stone-circle meteor shower right now (doesn't count the egg). */
     debugShower() {
       startShower(false);
     },
+    /** Debug: light the solution and raise The Giant's Road (cinematic when possible). */
+    debugSolve() {
+      if (runes.solved) return;
+      runes.lit.clear();
+      for (const i of runes.solution) runes.lit.add(i);
+      solveRunes();
+    },
     dispose() {
+      summit?.dispose?.();
+      causeway?.dispose?.();
+      summit = causeway = null;
       for (const h of handles) h.remove?.();
       for (const c of colliders) ctx.colliders?.remove?.(c);
       handles.length = colliders.length = 0;

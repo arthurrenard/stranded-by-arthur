@@ -1,6 +1,6 @@
 // Pure easter-egg logic (Builder F2): no three.js, no DOM, no ctx. Tested by tests/eastereggs.test.mjs.
 
-/** The 7 secrets, in journal order. */
+/** The secrets, in journal order (7 at launch, 9 since v4). */
 export const EGGS = [
   { id: 'bottle', name: 'Message in a Bottle' },
   { id: 'camp', name: "The Castaway's Camp" },
@@ -9,6 +9,8 @@ export const EGGS = [
   { id: 'konami', name: 'Moon Gravity' },
   { id: 'carving', name: 'Carved Initials' },
   { id: 'duck', name: 'Rubber Duck' },
+  { id: 'bella', name: 'A Message for Bella' }, // v4
+  { id: 'causeway', name: "The Giant's Road" }, // v4
 ];
 export const EGG_TOTAL = EGGS.length;
 export const eggName = (id) => EGGS.find((e) => e.id === id)?.name ?? id;

@@ -23,6 +23,7 @@ export const TIPS = [
   { icon: '🌴', title: 'Palm trees', text: 'Shaking a palm (E) can drop coconuts, but about one shake in twenty drops one on your head. Look for fallen coconuts on the sand first.' },
   { icon: '🛶', title: 'Paddle raft', text: "Craft a Wooden Paddle (wood 2, rope 1) and a Paddle Raft (wood 8, rope 3) at the water's edge. Board it with E, paddle with W/S, steer with A/D. It is slow and tiring, but it reaches Tempest Isle." },
   { icon: '⛈️', title: 'Tempest Isle storms', text: 'Violent storms sweep over Tempest Isle on many days and nights. They come in fast, hail hurts, fires outdoors go out, and rafts and sail boats can capsize. Get indoors until it passes.' },
+  { icon: '🎣', title: 'Fishing', text: 'With the fishing rod from the hut on Tempest Isle, look at any water from a shore, the dock or a raft and press R to cast. Ignore the nibbles; when the float dips hard and a ! appears, press Space at once. Then tap Space to reel in, and ease off when the fish runs or the tension bar goes red: a snapped line can take the rod with it. Grill the catch at a campfire (R).' },
 ];
 
 /** v3: the hunger STAT icon (the leaves ITEM keeps 🍃). */

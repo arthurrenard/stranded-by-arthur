@@ -282,9 +282,50 @@ export function create(ctx) {
     if (!s) return null;
     list.push(s);
     placeCacheMap.clear();
-    ctx.events?.emit?.('structure:placed', { type, position: s.position.clone(), structure: s });
+    ctx.events?.emit?.('structure:placed', { type, position: s.position.clone(), structure: s, id: s.id, yaw: s.yaw });
     afterBuild(s);
     return s;
+  }
+
+  /** v4 (net): build at a known spot (a remote player placed it). No toasts/hints; a campfire still starts lit.
+   *  Returns the structure or null. */
+  function placeAt(type, x, z, yaw = 0) {
+    if (!L.FOOTPRINT[type] || !Number.isFinite(x) || !Number.isFinite(z)) return null;
+    let pl = checkSpot(type, x, z, Number.isFinite(yaw) ? yaw : 0);
+    if (!pl?.ok) pl = { ok: true, type, x, z, yaw: Number.isFinite(yaw) ? yaw : 0, y: ctx.world?.heightAt?.(x, z) ?? 0 }; // trust the remote
+    let s = null;
+    try {
+      if (type === 'campfire') s = makeCampfire(pl);
+      else if (type === 'signal_fire') s = makeSignalFire(pl);
+      else if (type === 'shelter') s = makeShelter(pl);
+      else if (type === 'sos') s = makeSos(pl);
+    } catch (e) {
+      console.error('[structures] remote build failed', e);
+      return null;
+    }
+    if (!s) return null;
+    list.push(s);
+    placeCacheMap.clear();
+    ctx.events?.emit?.('structure:placed', { type, position: s.position.clone(), structure: s, id: s.id, yaw: s.yaw, remote: true });
+    if (type === 'campfire') lightFire(s, 'build');
+    return s;
+  }
+  function byId(id) {
+    for (const s of list) if (s.id === id && !s.removed) return s;
+    return null;
+  }
+  /** v4 (net): light / extinguish a fire by structure id (remote fire:lit / fire:out). */
+  function lightById(id) {
+    const s = byId(id);
+    if (!s || !s.heat) return false;
+    lightFire(s, 'remote');
+    return true;
+  }
+  function extinguishById(id) {
+    const s = byId(id);
+    if (!s || !s.heat) return false;
+    extinguish(s, 'remote');
+    return true;
   }
 
   function afterBuild(s) {
@@ -527,7 +568,7 @@ export function create(ctx) {
     s.flare = 1;
     s.heat.lit = true;
     ctx.heatSources?.add?.(s.heat);
-    ctx.events?.emit?.('fire:lit', { fire: s, kind: s.type, reason: why });
+    ctx.events?.emit?.('fire:lit', { fire: s, kind: s.type, reason: why, id: s.id });
     ctx.audio?.play?.('ignite', { position: s.position });
     burstEmbers(s, s.big ? 50 : 22);
   }
@@ -539,10 +580,10 @@ export function create(ctx) {
     s.ember = K.emberHours;
     ctx.heatSources?.delete?.(s.heat);
     if (cook.fire === s) stopCooking('fire');
-    ctx.events?.emit?.('fire:out', { fire: s, kind: s.type, reason });
+    ctx.events?.emit?.('fire:out', { fire: s, kind: s.type, reason, id: s.id });
     const p = ctx.player?.position;
     const near = !p || distXZ(p, s.position) < 120;
-    if (!near) return;
+    if (!near || reason === 'remote') return;
     if (reason === 'gale') {
       toast('The gale blows your fire out!', { icon: '🌬️', kind: 'warn', key: 'fire' + s.id });
       return;
@@ -1218,6 +1259,10 @@ export function create(ctx) {
     },
     place,
     findPlacement,
+    /** v4 (net): remote placement / fire sync by stable structure id (ids are on structure:placed, fire:lit, fire:out). */
+    placeAt,
+    lightById,
+    extinguishById,
     nearestFire,
     toggleTorch,
     isTorchLit: () => torch.lit,

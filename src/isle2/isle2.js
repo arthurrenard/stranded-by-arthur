@@ -1,6 +1,6 @@
 // Tempest Isle content (V3-B, SPEC §11): the dock in the cove, the fisherman's motorboat moored at its end, the
-// fishing hut on the summit plateau (isle2-hut.js: interior, hearth, lantern, burning it down), fishing from the
-// dock / beaches / lakeshores (isle2-fishing.js) and rockfall on the steep upper slopes (isle2-rockfall.js).
+// fishing hut on the summit plateau (isle2-hut.js: interior, hearth, lantern, burning it down), the dock hook for the
+// fishing minigame (isle2-fishing.js → ctx.fishing, V4-C) and rockfall on the steep upper slopes (isle2-rockfall.js).
 //
 // Public API (ctx.isle2):
 //   motorboat: { object, position (=== object.position), heading (yaw), moored }   (Builder C makes it drivable)

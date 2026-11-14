@@ -9,6 +9,7 @@
 // (without one the models fall back to plain colors), so geometry building can be smoke-tested.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { drawGlyph } from './eggRunes.js';
 
 const HAS_DOM = typeof document !== 'undefined';
 const PI = Math.PI;
@@ -783,7 +784,7 @@ export function createLeanToRuin() {
 }
 
 /** Boulder with a flat face carrying tally marks + "43 days" (face toward local +Z). */
-export function createTallyRock() {
+export function createTallyRock(glyphs = null) {
   const geo = cached('tallyRock', () => {
     const g = jittered(new THREE.IcosahedronGeometry(0.85, 1), 0.1, 43, (x, y, z) => [x, y, z > 0.5 ? 0.5 + (z - 0.5) * 0.08 : z]);
     const b = new Builder(43, 0.12);
@@ -792,8 +793,8 @@ export function createTallyRock() {
   });
   const group = new THREE.Group();
   group.add(mesh(geo, materials().vc));
-  const tex = cached('tallyTex', () =>
-    canvasTexture(320, 200, (g, w, h) => {
+  const tex = cached('tallyTex:' + (glyphs ? glyphs.join('') : ''), () =>
+    canvasTexture(320, 240, (g, w, h) => {
       g.clearRect(0, 0, w, h);
       const r = prng(43);
       g.lineCap = 'round';
@@ -829,30 +830,119 @@ export function createTallyRock() {
       g.fillText('43 days', 92, 186);
       g.fillStyle = 'rgba(236,230,214,0.95)';
       g.fillText('43 days', 90, 184);
+      // v4 clue: a row of four rune glyphs scratched under the tally (the same marks as the standing stones)
+      if (glyphs) {
+        g.lineCap = 'round';
+        g.lineJoin = 'round';
+        for (let k = 0; k < glyphs.length; k++) {
+          const x = 76 + k * 48, y = 200;
+          g.strokeStyle = 'rgba(40,36,30,0.6)';
+          g.lineWidth = 5;
+          drawGlyph(g, glyphs[k], x + 1.5, y + 1.5, 26, 32);
+          g.strokeStyle = 'rgba(236,230,214,0.95)';
+          g.lineWidth = 2.6;
+          drawGlyph(g, glyphs[k], x, y, 26, 32);
+        }
+      }
     })
   );
   if (tex) {
     const decal = mesh(
-      new THREE.PlaneGeometry(1.0, 0.62),
+      new THREE.PlaneGeometry(1.0, 0.75),
       new THREE.MeshStandardMaterial({ map: tex, transparent: true, alphaTest: 0.05, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -2, depthWrite: false }),
       { cast: false }
     );
-    decal.position.set(0, 0.52, 0.52);
+    decal.position.set(0, 0.5, 0.52);
     group.add(decal);
   }
   return { group };
 }
 
+// ── 7b. Weathered note on a post (v4: the logbook clue at the fishing hut door) ──
+/**
+ * createNoteSign(glyphs, lines) -> { group, paperPos (Vector3, local) }. A short driftwood post with a torn logbook
+ * page nailed to it; the page faces local +Z. `lines` are short handwritten lines, `glyphs` the rune row.
+ */
+export function createNoteSign(glyphs = [], lines = ['…the four that', 'face the storm.', 'Light them while', 'the island sleeps.']) {
+  const geo = cached('noteSignPost', () => {
+    const b = new Builder(61, 0.1);
+    b.cyl(0, 0, 0, 0.03, 1.15, -0.02, 0.045, 0x6b5238, 6, 0.035);
+    b.add(new THREE.BoxGeometry(0.06, 0.05, 0.08), 0x4a3a2a, M(0.02, 0.9, 0.03)); // the nail head
+    return b.build();
+  });
+  const group = new THREE.Group();
+  group.add(mesh(geo, materials().vc));
+  const tex = canvasTexture(256, 320, (g, w, h) => {
+    g.clearRect(0, 0, w, h);
+    const r = prng(19);
+    // torn parchment
+    g.fillStyle = 'rgba(224,210,172,0.97)';
+    g.beginPath();
+    g.moveTo(10, 8);
+    for (let x = 10; x <= w - 10; x += 16) g.lineTo(x, 8 + (r() - 0.5) * 8);
+    for (let y = 8; y <= h - 10; y += 16) g.lineTo(w - 10 + (r() - 0.5) * 6, y);
+    for (let x = w - 10; x >= 10; x -= 16) g.lineTo(x, h - 10 + (r() - 0.5) * 10);
+    for (let y = h - 10; y >= 8; y -= 16) g.lineTo(10 + (r() - 0.5) * 6, y);
+    g.closePath();
+    g.fill();
+    // water stains
+    for (let i = 0; i < 5; i++) {
+      g.fillStyle = `rgba(120,96,60,${0.08 + r() * 0.1})`;
+      g.beginPath();
+      g.ellipse(30 + r() * (w - 60), 30 + r() * (h - 60), 18 + r() * 30, 12 + r() * 22, r() * 3, 0, PI * 2);
+      g.fill();
+    }
+    // faint ruled lines + handwriting
+    g.strokeStyle = 'rgba(90,70,50,0.18)';
+    g.lineWidth = 1;
+    for (let y = 44; y < h - 20; y += 30) {
+      g.beginPath();
+      g.moveTo(22, y);
+      g.lineTo(w - 22, y);
+      g.stroke();
+    }
+    g.fillStyle = 'rgba(38,30,52,0.88)';
+    g.font = 'italic 24px Georgia, "Times New Roman", serif';
+    g.textAlign = 'center';
+    let y = 62;
+    for (let i = 0; i < Math.min(2, lines.length); i++, y += 32) g.fillText(lines[i], w / 2 + (r() - 0.5) * 4, y);
+    // the rune row
+    g.strokeStyle = 'rgba(38,30,52,0.9)';
+    g.lineWidth = 3.2;
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    const n = glyphs.length || 0, gw = 30, gap = 18;
+    const x0 = (w - (n * gw + (n - 1) * gap)) / 2;
+    for (let k = 0; k < n; k++) drawGlyph(g, glyphs[k], x0 + k * (gw + gap), y + 2, gw, 40);
+    y += 70;
+    for (let i = 2; i < lines.length; i++, y += 32) g.fillText(lines[i], w / 2 + (r() - 0.5) * 4, y);
+    // nail hole
+    g.fillStyle = 'rgba(40,30,20,0.9)';
+    g.beginPath();
+    g.arc(w / 2, 20, 4, 0, PI * 2);
+    g.fill();
+  });
+  if (tex) {
+    const paper = mesh(new THREE.PlaneGeometry(0.3, 0.375), new THREE.MeshStandardMaterial({ map: tex, transparent: true, alphaTest: 0.1, roughness: 0.95, side: THREE.DoubleSide }), { cast: false });
+    paper.position.set(0.02, 0.73, 0.07);
+    paper.rotation.set(0.05, 0, -0.08);
+    group.add(paper);
+  }
+  return { group, paperPos: new THREE.Vector3(0.02, 0.75, 0.1) };
+}
+
 // ── 8. Standing stones (circle of 7) ─────────────────────────────────────
 /**
- * Returns { group (local, centered), runeMat (animate .color/.opacity), glowMat (ground ring), stones: [{x,z,r}] }.
+ * Returns { group (local, centered), runeMats[7] (per stone: animate .color/.opacity), haloMats[7] (additive halo behind
+ * each rune, mesh hidden while opacity 0: see group children userData.mat), glowMat (ground ring), beam + beamMat
+ * (light pillar over the altar, hidden), stones: [{x,z,r,top}] }. runeMat = runeMats[0] (compat).
  * heightAt(x,z) world function + center are needed so each stone sits on the plateau.
  */
 export function createStoneCircle(heightAt, cx, cz, R = 8.5) {
   const r = prng(7777);
   const sb = new Builder(77, 0.14);
   const stones = [];
-  const runeGeos = [];
+  const runeGeos = [], haloGeos = [];
   const baseY = heightAt(cx, cz);
   for (let i = 0; i < 7; i++) {
     const a = (i / 7) * PI * 2 + 0.2;
@@ -868,58 +958,60 @@ export function createStoneCircle(heightAt, cx, cz, R = 8.5) {
     const m = M(x, y + hgt / 2, z, lean, faceY, (r() - 0.5) * 0.1);
     sb.add(g, (px, py, pz, out) => out.set(h3(Math.round(px * 3), Math.round(py * 3), Math.round(pz * 3), i) > 0.78 ? 0x77805e : py > hgt * 0.8 ? 0x928c80 : 0x837d72), m);
     stones.push({ x: cx + x, z: cz + z, r: 0.6, top: baseY + y + hgt });
-    // rune strip on the inner face (column i of the rune atlas)
+    // rune plane on the inner face (column i of the glyph atlas; its own material so each stone can light up)
     const pg = new THREE.PlaneGeometry(0.5, 1.5);
     const uv = pg.attributes.uv;
     for (let k = 0; k < uv.count; k++) uv.setX(k, (i + uv.getX(k)) / 7);
     pg.applyMatrix4(new THREE.Matrix4().multiplyMatrices(m, M(0, -hgt / 2 + 1.35, 0.33)));
     runeGeos.push(pg);
+    const hg = new THREE.PlaneGeometry(2.4, 3.4);
+    hg.applyMatrix4(new THREE.Matrix4().multiplyMatrices(m, M(0, -hgt / 2 + 1.45, 0.5)));
+    haloGeos.push(hg);
   }
   // flat altar stone in the middle
   sb.add(jittered(new THREE.CylinderGeometry(1.1, 1.3, 0.45, 7), 0.05, 99), 0x7c766b, M(0, 0.05, 0));
   const group = new THREE.Group();
   group.add(mesh(sb.build(), materials().vc));
+  // 7 distinct glyphs (eggRunes.js), one per column
   const runeTex = canvasTexture(7 * 64, 192, (g, w, h) => {
     g.clearRect(0, 0, w, h);
     g.strokeStyle = '#ffffff';
-    g.lineWidth = 6;
+    g.lineWidth = 7;
     g.lineCap = 'round';
+    g.lineJoin = 'round';
     g.shadowColor = '#ffffff';
-    g.shadowBlur = 8;
-    const rr = prng(31);
-    for (let i = 0; i < 7; i++) {
-      for (let k = 0; k < 3; k++) {
-        const x0 = i * 64 + 32, y0 = 18 + k * 58;
-        g.beginPath();
-        g.moveTo(x0, y0);
-        g.lineTo(x0, y0 + 44);
-        const s = rr();
-        if (s < 0.33) {
-          g.moveTo(x0, y0 + 10);
-          g.lineTo(x0 + 16, y0 + 22);
-          g.lineTo(x0, y0 + 34);
-        } else if (s < 0.66) {
-          g.moveTo(x0 - 15, y0 + 8);
-          g.lineTo(x0 + 15, y0 + 30);
-        } else {
-          g.moveTo(x0 + 15, y0 + 6);
-          g.lineTo(x0, y0 + 20);
-          g.lineTo(x0 - 15, y0 + 6);
-        }
-        g.stroke();
-      }
-    }
+    g.shadowBlur = 9;
+    for (let i = 0; i < 7; i++) drawGlyph(g, i, i * 64 + 11, 26, 42, 140);
   });
-  const runeMat = new THREE.MeshBasicMaterial({ color: 0x4a4640, map: runeTex, transparent: true, opacity: runeTex ? 0.7 : 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, fog: true });
-  const runes = mesh(mergeGeometries(runeGeos), runeMat, { cast: false, receive: false });
-  runes.renderOrder = 3;
-  group.add(runes);
-  const glowMat = new THREE.MeshBasicMaterial({ color: 0x6ff0d8, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, map: glowTexture() });
+  const runeMats = [], haloMats = [];
+  const halo = glowTexture();
+  for (let i = 0; i < 7; i++) {
+    const rm = new THREE.MeshBasicMaterial({ color: 0x4a4640, map: runeTex, transparent: true, opacity: runeTex ? 0.7 : 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, fog: true });
+    const r = mesh(runeGeos[i], rm, { cast: false, receive: false });
+    r.renderOrder = 3;
+    group.add(r);
+    runeMats.push(rm);
+    const hm = new THREE.MeshBasicMaterial({ color: 0x8ffbe8, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, map: halo, side: THREE.DoubleSide });
+    const hmesh = mesh(haloGeos[i], hm, { cast: false, receive: false });
+    hmesh.renderOrder = 4;
+    hmesh.visible = false;
+    hmesh.userData.mat = hm;
+    group.add(hmesh);
+    haloMats.push(hm);
+  }
+  const glowMat = new THREE.MeshBasicMaterial({ color: 0x6ff0d8, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, map: halo });
   const ring = mesh(new THREE.PlaneGeometry(7, 7), glowMat, { cast: false, receive: false });
   ring.rotation.x = -PI / 2;
   ring.position.y = 0.32;
   group.add(ring);
-  return { group, runeMat, glowMat, stones };
+  // tall beam of light over the altar (the solve cinematic turns it on: scale.y + opacity)
+  const beamMat = new THREE.MeshBasicMaterial({ color: 0xa8fff0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false });
+  const beam = mesh(new THREE.CylinderGeometry(0.35, 1.0, 1, 10, 1, true), beamMat, { cast: false, receive: false });
+  beam.position.y = 0.5;
+  beam.scale.y = 1;
+  beam.visible = false;
+  group.add(beam);
+  return { group, runeMat: runeMats[0], runeMats, haloMats, glowMat, beam, beamMat, stones };
 }
 
 // ── 9. Rubber duck ───────────────────────────────────────────────────────

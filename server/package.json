@@ -1,0 +1,15 @@
+{
+  "name": "stranded-relay-server",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Tiny WebSocket relay server for STRANDED: Driftwood Isle multiplayer (rooms, host election, snapshots).",
+  "type": "module",
+  "main": "index.js",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws": "8.18.0"
+  }
+}

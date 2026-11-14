@@ -54,12 +54,20 @@ uniform vec3 uSwCenter;   // x, z, radius
 uniform float uSwLandZ;
 uniform vec3 uSwReef;     // x, z, radius: the swell breaks and flattens over the reef
 uniform vec4 uSwBoat;     // x, z, yaw, waterline y
+uniform vec4 uSwCrest;    // dirX, dirZ, front position (along dir), half width: a single big rogue crest (v4)
+uniform float uSwCrestAmp;
 varying float vSwFade;
 varying float vSwFoam;
 float swWaves(vec2 p, float t) {
   float h = 0.0;
   ${GLSL_WAVES}
   return h * uSwAmp;
+}
+float swCrest(vec2 p) {
+  float d = (dot(p, uSwCrest.xy) - uSwCrest.z) / max(uSwCrest.w, 0.01);
+  // steep front, longer back
+  float q = d > 0.0 ? d * 1.6 : d * 0.8;
+  return uSwCrestAmp * exp(-q * q) * (1.0 + 0.18 * sin(p.x * 0.8 + p.y * 0.6));
 }
 float swReef(vec2 p) {
   return smoothstep(uSwReef.z * 0.45, uSwReef.z, length(p - uSwReef.xy));
@@ -78,7 +86,8 @@ const VERT_MAIN = /* glsl */ `
   float swR = swReef(swW.xz);
   float swF = swOuter * swR;
   float swH = swWaves(swW.xz, uSwTime);
-  float swY = swF * (${BASE.toFixed(4)} * uSwAmp + 0.0001 + swH);
+  float swC = swOuter * swCrest(swW.xz);
+  float swY = swF * (${BASE.toFixed(4)} * uSwAmp + 0.0001 + swH) + swC;
   // push the water under the hull (ellipse ~ boat footprint, in boat-local coordinates)
   vec2 bl = swW.xz - uSwBoat.xy;
   float cy = cos(uSwBoat.z), sy = sin(uSwBoat.z);
@@ -88,6 +97,7 @@ const VERT_MAIN = /* glsl */ `
   transformed.y += swY;
   vSwFade = swF;
   vSwFoam = max(smoothstep(0.5, 1.0, swH / (${SWELL_MAX.toFixed(4)} * max(uSwAmp, 0.001))) * swF, (1.0 - swR) * swOuter * 0.9);
+  vSwFoam = max(vSwFoam, smoothstep(0.35, 0.9, swC / max(uSwCrestAmp, 0.01)) * swOuter);
 }
 `;
 
@@ -103,7 +113,7 @@ diffuseColor.a *= smoothstep(0.0, 0.4, vSwFade);
 
 /**
  * createStormSea({ size, segments }) -> { mesh, setCenter(x, z, r), setLandZ(z), setReef(x, z, r), setTime(t), setAmp(a),
- *   setBoat(x, z, yaw, waterlineY), surfaceAt(x, z) (world y, matching the GPU), dispose() }
+ *   setBoat(x, z, yaw, waterlineY), setCrest(dirX, dirZ, frontS, halfWidth, amp), surfaceAt(x, z) (world y, matching the GPU), dispose() }
  */
 export function createStormSea({ size = 460, segments = 150 } = {}) {
   const geo = new THREE.PlaneGeometry(size, size, segments, segments);
@@ -117,6 +127,8 @@ export function createStormSea({ size = 460, segments = 150 } = {}) {
     uSwLandZ: { value: -1e5 },
     uSwReef: { value: new THREE.Vector3(0, 0, 0.001) },
     uSwBoat: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uSwCrest: { value: new THREE.Vector4(0, -1, -1e5, 5) },
+    uSwCrestAmp: { value: 0 },
   };
   const mat = new THREE.MeshStandardMaterial({
     color: 0x173a4c,
@@ -165,6 +177,29 @@ export function createStormSea({ size = 460, segments = 150 } = {}) {
     setBoat(x, z, yaw, waterY) {
       uniforms.uSwBoat.value.set(x, z, yaw, waterY);
     },
+    /**
+     * The rogue crest (v4): a ridge perpendicular to (dirX, dirZ) whose front sits at `frontS` along that direction
+     * (dot(p, dir) === frontS), `halfWidth` m wide, `amp` m high. amp 0 disables it.
+     */
+    setCrest(dirX, dirZ, frontS, halfWidth, amp) {
+      const l = Math.hypot(dirX, dirZ) || 1;
+      uniforms.uSwCrest.value.set(dirX / l, dirZ / l, frontS, halfWidth);
+      uniforms.uSwCrestAmp.value = amp;
+    },
+    /** Crest height at x,z (world), matching the shader (without the rim fade). */
+    crestAt(x, z) {
+      const c = uniforms.uSwCrest.value, amp = uniforms.uSwCrestAmp.value;
+      if (amp <= 0) return 0;
+      const d = (x * c.x + z * c.y - c.z) / Math.max(c.w, 0.01);
+      const q = d > 0 ? d * 1.6 : d * 0.8;
+      return amp * Math.exp(-q * q) * (1 + 0.18 * Math.sin(x * 0.8 + z * 0.6));
+    },
+    /** Rim + island-side fade only (no reef flattening): what the crest is scaled by. */
+    outerFadeAt(x, z) {
+      const c = uniforms.uSwCenter.value;
+      const r = Math.hypot(x - c.x, z - c.y);
+      return smooth(c.z, c.z * 0.55, r) * smooth(uniforms.uSwLandZ.value, uniforms.uSwLandZ.value + 28, z);
+    },
     /** World-space fade 0..1 of the swell at x,z (rim + island side). */
     fadeAt(x, z) {
       const c = uniforms.uSwCenter.value;
@@ -177,7 +212,7 @@ export function createStormSea({ size = 460, segments = 150 } = {}) {
     surfaceAt(x, z) {
       const f = api.fadeAt(x, z);
       const a = uniforms.uSwAmp.value;
-      return f * (BASE * a + 0.0001 + swellHeight(x, z, uniforms.uSwTime.value, a));
+      return f * (BASE * a + 0.0001 + swellHeight(x, z, uniforms.uSwTime.value, a)) + api.outerFadeAt(x, z) * api.crestAt(x, z);
     },
     dispose() {
       mesh.parent?.remove(mesh);

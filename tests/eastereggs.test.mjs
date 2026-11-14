@@ -1,4 +1,4 @@
-// Unit tests for src/story/eggLogic.js + a headless smoke test that finds all 7 easter eggs through
+// Unit tests for src/story/eggLogic.js + a headless smoke test that finds the 7 launch easter eggs through
 // src/story/eastereggs.js with stubbed systems. Run: node tests/eastereggs.test.mjs
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
@@ -21,8 +21,8 @@ function test(name, fn) {
 
 // ── Pure logic ───────────────────────────────────────────────────────────
 test('eggs list', () => {
-  assert.equal(L.EGG_TOTAL, 7);
-  assert.equal(new Set(L.EGGS.map((e) => e.id)).size, 7);
+  assert.equal(L.EGG_TOTAL, 9); // v4: bella + causeway
+  assert.equal(new Set(L.EGGS.map((e) => e.id)).size, 9);
   assert.equal(L.eggName('duck'), 'Rubber Duck');
 });
 
@@ -106,7 +106,7 @@ test('carving cylinder reads left-to-right, upright', () => {
   assert.ok(top > 0, 'v = 1 at the top');
 });
 
-// ── Headless smoke test: find all 7 eggs ─────────────────────────────────
+// ── Headless smoke test: find the 7 launch eggs ─────────────────────────────────
 const world = createHeightfield();
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(70, 1.6, 0.1, 2600);
@@ -167,9 +167,9 @@ const step = (seconds, dt = 1 / 30) => {
 const ee = EE.create(ctx);
 test('init builds the eggs', () => {
   ee.init();
-  assert.equal(ee.total, 7);
+  assert.equal(ee.total, 9);
   assert.equal(ee.found.size, 0);
-  assert.equal(handles.length, 6, 'bottle, volleyball, note, tally, carving, duck');
+  assert.ok(handles.length >= 6, 'bottle, volleyball, note, tally, carving, duck (+ v4: runes, survey, bella)');
   assert.ok(log.colliders.length >= 3 + 8, 'camp + 7 stones + altar');
   assert.equal(typeof keyFn, 'function');
   assert.ok(scene.getObjectByName('eastereggs'));
@@ -295,14 +295,14 @@ test('golden butterfly at dawn lands on your hand -> blessed', () => {
   assert.equal(g.visible, false, 'gone for good once found');
 });
 
-test('all 7 found, events + journal', () => {
+test('the 7 launch eggs found, events + journal', () => {
   assert.equal(ee.found.size, 7);
   const ev = log.events.filter(([n]) => n === 'easter:found').map(([, p]) => p);
   assert.equal(ev.length, 7);
   assert.deepEqual(ev.map((p) => p.found), [1, 2, 3, 4, 5, 6, 7]);
-  assert.ok(ev.every((p) => p.total === 7 && p.name && typeof p.text === 'string'));
+  assert.ok(ev.every((p) => p.total === 9 && p.name && typeof p.text === 'string'));
   const eggJ = log.journal.filter(([id]) => id.startsWith('egg:')).map(([id]) => id.slice(4));
-  assert.deepEqual(new Set(eggJ), new Set(L.EGGS.map((e) => e.id)));
+  assert.deepEqual(new Set(eggJ), new Set(L.EGGS.slice(0, 7).map((e) => e.id)));
   assert.ok(log.sounds.filter((s) => s.name === 'chime').length >= 7);
   for (const v of [ctx.camera.position]) assert.ok(Number.isFinite(v.x));
   ee.dispose();
