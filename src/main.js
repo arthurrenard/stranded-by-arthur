@@ -12,6 +12,8 @@ import { ITEMS } from './core/items.js';
 import { fmtHour } from './core/util.js';
 import { createHeightfield } from './world/heightfield.js';
 import * as Hud from './ui/hud.js';
+import * as Quality from './gfx/quality.js';
+import { createPost } from './gfx/post.js';
 import * as Audio from './audio/audio.js';
 import * as Sky from './world/sky.js';
 import * as Weather from './world/weather.js';
@@ -61,10 +63,12 @@ const camera = new THREE.PerspectiveCamera(CONFIG.graphics.fov, window.innerWidt
 camera.rotation.order = 'YXZ';
 scene.add(camera); // so camera-attached objects (torch, hands) render
 
+let post = null; // final color-grade/vignette/grain overlay (src/gfx/post.js); created once ctx exists
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  post?.setSize?.(window.innerWidth, window.innerHeight);
 });
 
 // ── Shared context ───────────────────────────────────────────────────────
@@ -111,6 +115,12 @@ const ctx = {
   stats_summary: { distanceWalked: 0, itemsCrafted: 0, foodsEaten: 0, plantsGathered: 0 },
 };
 ctx.interact = createInteract(ctx);
+try {
+  post = createPost(ctx); // ?nopost / ?post=0 turn it off
+} catch (e) {
+  console.error('[main] post pass unavailable', e);
+  post = null;
+}
 window.__game = ctx;
 
 /** Difficulty preset: { id, label, thirstMul, hungerMul, damageMul, regenMul, earlyDamageBelow, ..., plan }.
@@ -170,6 +180,7 @@ function boot() {
   // Order matters only for init(); create() must not depend on other systems.
   add('ui', Hud, { always: true });
   add('audio', Audio, { always: true });
+  add('quality', Quality, { always: true }); // graphics presets + adaptive resolution (before sky/flora: they read it lazily)
   add('sky', Sky);
   add('weather', Weather);
   add('terrain', Terrain);
@@ -351,7 +362,10 @@ function tick(dt, rawDt = dt, render = true) {
     }
   } else unlockedFor = 0;
 
-  if (render) renderer.render(scene, camera);
+  if (render) {
+    if (post) post.render();
+    else renderer.render(scene, camera);
+  }
   ctx.input.endFrame(dt);
 
   if (DEBUG) {

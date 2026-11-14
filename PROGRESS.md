@@ -78,6 +78,7 @@ a Bella message-in-a-bottle easter egg.
   LESSON: at most 2 agents at a time now, with narrow scopes.
 - [x] Wave 1 finished (run wf_8ad030be-b01 retried): net UI/docs/tests + HUD fishing widget/toast queue/zones. Two-tab LOCAL multiplayer
   test passed (2026-11-21): create room → join by URL → avatar visible at the right spot → harvest synced (driftwood:2) → chat relayed.
-- [~] Wave 2 (2 agents): D aesthetics (colors/materials/lighting/post FX/HUD skin/avatar look), E optimization (tree LOD, shadow
+- [x] Wave 2 done + wired (quality.js before sky, post.js around renderer.render). Spawn view now 197 calls / 1.8 M tris
+  (was 231 / 2.67 M); golden hour/night reviewed. Was: Wave 2 (2 agents): D aesthetics (colors/materials/lighting/post FX/HUD skin/avatar look), E optimization (tree LOD, shadow
   casters, grass, quality presets + adaptive resolution in NEW src/gfx/quality.js → orchestrator wires it in main.js)
-- [ ] Integrate + playtest, commit + push; hosting instructions to the user
+- [~] Integrate + playtest DONE; commit + push in progress (2026-11-21)

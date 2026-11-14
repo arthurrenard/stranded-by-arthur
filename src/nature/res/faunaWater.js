@@ -691,7 +691,24 @@ if ( aSac > 0.5 ) {
       updateFish(dt, fr);
       updateDragons(dt, fr);
       updateFrogs(dt, fr);
-      updateRipples(dt, fr);
+      // V4-E: no draw call (and no instance upload) for empty ripple / dragonfly sets
+      let anyR = false;
+      for (let i = 0; i < NR; i++) {
+        if (ripples[i].on) {
+          anyR = true;
+          break;
+        }
+      }
+      if (anyR || rippleMesh.visible) updateRipples(dt, fr);
+      rippleMesh.visible = anyR;
+      let anyD = false;
+      for (let i = 0; i < ND; i++) {
+        if (dragons[i].on) {
+          anyD = true;
+          break;
+        }
+      }
+      dBody.visible = dWing.visible = anyD;
     },
     count: () => ({
       pads: pads.length,

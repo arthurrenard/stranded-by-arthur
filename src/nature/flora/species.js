@@ -6,7 +6,7 @@
 // Trees: oak, pine, birch, palm, willow, apple, chestnut, snag, carvedOak (the landmark), windPine (v3, Tempest Isle;
 // entries keep type 'pine' and set vk: 'windPine').
 // Undergrowth: fern, bush, reeds, lily, boulder, rock, log, flower (with a closed pose), saplings.
-import { GeoBuilder, tube, blob, cone, frond, strip, octa, disc } from './builder.js';
+import { GeoBuilder, tube, blob, cone, frond, strip, octa, disc, withLowDetail } from './builder.js';
 import { PAL, jit, mix, mul } from './palette.js';
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -780,9 +780,13 @@ export function makeFlower(rng, colorIdx) {
 
 // ── Library ──────────────────────────────────────────────────────────────
 /** Build every variant once. rng: a forked core rng. */
-export function buildLibrary(rng) {
+/**
+ * The variants baked into the tree chunks (trees + boulders). Every variant has its own named rng fork,
+ * so buildLowLibrary() can rebuild exactly the same shapes in low-detail mode.
+ */
+function chunkVariants(rng) {
   const many = (n, fn) => Array.from({ length: n }, (_, i) => fn(rng.fork('v' + i)));
-  const lib = {
+  return {
     oak: many(7, makeOak),
     pine: many(6, makePine),
     birch: many(6, makeBirch),
@@ -791,15 +795,30 @@ export function buildLibrary(rng) {
     apple: many(5, makeApple),
     chestnut: many(5, makeChestnut),
     snag: many(5, makeSnag),
-    carvedOak: makeCarvedOak(rng.fork('carved')),
     windPine: Array.from({ length: 4 }, (_, i) => makeWindPine(rng.fork('wp' + i))), // v3: Tempest Isle
+    boulder: [...many(4, (r) => makeBoulder(r, 0)), ...many(4, (r) => makeBoulder(r, 0.85))],
+  };
+}
+
+/**
+ * V4-E tree LOD: the same tree/boulder variants as buildLibrary(rng) (same rng!) with ≈¼ of the
+ * triangles (see builder.js, low-detail mode). Same keys and indices as the full library.
+ */
+export function buildLowLibrary(rng) {
+  return withLowDetail(() => chunkVariants(rng));
+}
+
+export function buildLibrary(rng) {
+  const many = (n, fn) => Array.from({ length: n }, (_, i) => fn(rng.fork('v' + i)));
+  const lib = {
+    ...chunkVariants(rng),
+    carvedOak: makeCarvedOak(rng.fork('carved')),
     saplingBroad: makeSaplingBroad(rng.fork('sapB')),
     saplingConifer: makeSaplingConifer(rng.fork('sapC')),
     fern: many(5, makeFern),
     bush: [...many(4, (r) => makeBush(r, false)), ...many(2, (r) => makeBush(r, true))],
     reeds: many(4, makeReeds),
     lily: many(4, makeLily),
-    boulder: [...many(4, (r) => makeBoulder(r, 0)), ...many(4, (r) => makeBoulder(r, 0.85))],
     rock: many(5, (r) => makeBoulder(r, 0.3, 0)),
     log: many(3, makeLog),
     flower: [],

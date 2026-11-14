@@ -53,6 +53,7 @@ export function createBirds(ctx, shared) {
   const _s = new THREE.Vector3();
   const _c = new THREE.Color();
   const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+  let frameN = 0;
   const tmp = { x: 0, z: 0, w: 0 };
 
   const flocks = [];
@@ -63,6 +64,7 @@ export function createBirds(ctx, shared) {
       const K = KINDS[key];
       for (let f = 0; f < K.flocks; f++) {
         const fl = {
+          drawn: -1, // V4-E: -1 unknown, 0 zeroed (hidden), 1 drawn
           key, K, birds: [], state: A_AIR, vis: 0,
           cx: 0, cy: 30, cz: 0, tx: 0, tz: 0, dir: rand() < 0.5 ? -1 : 1, theta: rand() * TAU,
           R: rr(K.R[0], K.R[1]), alt: rr(K.alt[0], K.alt[1]),
@@ -569,9 +571,35 @@ export function createBirds(ctx, shared) {
     },
     update(dt, fr) {
       for (let k = 0; k < flocks.length; k++) updateFlock(flocks[k], dt, fr);
-      for (let k = 0; k < birds.length; k++) write(birds[k]);
-      mesh.instanceMatrix.needsUpdate = true;
-      aFlap.needsUpdate = true;
+      // V4-E: hidden flocks are zeroed once, flocks farther than fr.near2 from the camera refresh their
+      // matrices every 3rd frame only, and the mesh isn't drawn while no flock is out.
+      frameN++;
+      let live = 0, dirty = false;
+      for (let k = 0; k < flocks.length; k++) {
+        const fl = flocks[k];
+        const B = fl.birds;
+        if (fr.jumped) fl.drawn = -1;
+        if (fl.vis < 0.01 || !fl.placed || !B.length) {
+          if (fl.drawn !== 0) {
+            for (let j = 0; j < B.length; j++) mesh.setMatrixAt(B[j].i, zero);
+            fl.drawn = 0;
+            dirty = true;
+          }
+          continue;
+        }
+        live++;
+        const b0 = B[0];
+        const dx = b0.x - fr.camX, dy = b0.y - fr.camY, dz = b0.z - fr.camZ;
+        if (fl.drawn === 1 && !(dx * dx + dy * dy + dz * dz < fr.near2) && (frameN + k) % 3 !== 0) continue;
+        for (let j = 0; j < B.length; j++) write(B[j]);
+        fl.drawn = 1;
+        dirty = true;
+      }
+      if (dirty) {
+        mesh.instanceMatrix.needsUpdate = true;
+        aFlap.needsUpdate = true;
+      }
+      mesh.visible = live > 0;
     },
     count: () => flocks.reduce((n, fl) => n + (fl.vis > 0.01 && fl.placed ? fl.birds.length : 0), 0),
     /** Debug: flock states, e.g. __game.fauna.debugBirds() */

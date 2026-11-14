@@ -23,6 +23,7 @@ import { createBirds } from './res/faunaBirds.js';
 import { createWaterLife } from './res/faunaWater.js';
 
 const JUMP_DIST = 40; // focus moving farther than this in one frame = teleport -> re-seed everything
+const NEAR_DIST = 150; // V4-E: butterflies / birds farther than this from the camera aren't drawn every frame
 
 export function create(ctx) {
   const group = new THREE.Group();
@@ -48,7 +49,12 @@ export function create(ctx) {
     pz: 0,
     sprinting: false,
     jumped: true,
+    camX: 0, // camera world position (V4-E distance culling)
+    camY: 0,
+    camZ: 0,
+    near2: NEAR_DIST * NEAR_DIST,
   };
+  const camV = new THREE.Vector3();
 
   const factories = [
     ['fireflies', createFireflies],
@@ -132,6 +138,11 @@ export function create(ctx) {
       frame.pz = shared.focus.z;
     }
     frame.sprinting = !!ctx.player?.sprinting && ctx.player?.moving !== false;
+    if (ctx.camera) ctx.camera.getWorldPosition(camV);
+    else camV.copy(shared.focus);
+    frame.camX = camV.x;
+    frame.camY = camV.y;
+    frame.camZ = camV.z;
     for (const sys of systems) run(sys, () => sys.s.update(dt, frame));
   }
 

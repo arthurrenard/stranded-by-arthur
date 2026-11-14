@@ -8,74 +8,76 @@ export function lin(hex) {
   return [c.r, c.g, c.b];
 }
 
+// V4-D art pass: per-species, less saturated, more natural greens (olive oak, sage willow, deep spruce,
+// autumn-tinged birch accents), darker trunks, softer flower pigments. Keys are stable (imported by name).
 export const PAL = {
   // foliage
-  oakLeaf: lin('#4f8a35'),
-  oakLeafLight: lin('#72aa45'),
-  oakLeafDark: lin('#386a27'),
-  pine: lin('#2f5d3a'),
-  pineLight: lin('#447a4a'),
-  pineDark: lin('#21452b'),
-  birchLeaf: lin('#93bd4c'),
-  birchLeafLight: lin('#b4d465'),
-  palm: lin('#6fa33c'),
-  palmDark: lin('#4c7d29'),
-  willow: lin('#86b24d'),
-  willowDark: lin('#5f8c37'),
-  appleLeaf: lin('#5c9b3b'),
-  apple: lin('#c8302a'),
-  appleBlush: lin('#d98a2b'),
-  chestnutLeaf: lin('#457d2e'),
-  catkin: lin('#e3d98f'),
-  sapling: lin('#6aa843'),
-  // bark & wood
-  bark: lin('#6b4f36'),
-  barkDark: lin('#4c3826'),
-  barkLight: lin('#82654a'),
-  barkGrey: lin('#6f655a'),
-  birchBark: lin('#e8e4da'),
-  birchMark: lin('#2f2b27'),
-  palmTrunk: lin('#8f7656'),
-  palmTrunkDark: lin('#6c583f'),
-  coconut: lin('#5a3f22'),
-  snag: lin('#8b8072'),
-  snagDark: lin('#5f564b'),
-  heartwood: lin('#c9a97a'),
-  fungus: lin('#e2c58c'),
-  fungusOrange: lin('#d8873a'),
+  oakLeaf: lin('#5a7a3c'), // olive
+  oakLeafLight: lin('#7d9650'),
+  oakLeafDark: lin('#3d5a2d'),
+  pine: lin('#2e4a3a'), // deep spruce
+  pineLight: lin('#45614c'),
+  pineDark: lin('#203628'),
+  birchLeaf: lin('#97a256'), // yellow-green
+  birchLeafLight: lin('#c0a85c'), // autumn-tinged accent
+  palm: lin('#6f8c46'),
+  palmDark: lin('#4c6634'),
+  willow: lin('#86985c'), // sage
+  willowDark: lin('#5e7244'),
+  appleLeaf: lin('#5e7f40'),
+  apple: lin('#b5402f'),
+  appleBlush: lin('#c98b3c'),
+  chestnutLeaf: lin('#4c6a33'),
+  catkin: lin('#d6cc94'),
+  sapling: lin('#6e8c48'),
+  // bark & wood (darker, warmer)
+  bark: lin('#58412f'),
+  barkDark: lin('#3b2b20'),
+  barkLight: lin('#725943'),
+  barkGrey: lin('#5d564e'),
+  birchBark: lin('#dcd5c6'),
+  birchMark: lin('#2c2824'),
+  palmTrunk: lin('#86704f'),
+  palmTrunkDark: lin('#5e4c37'),
+  coconut: lin('#553d24'),
+  snag: lin('#7f7569'),
+  snagDark: lin('#554d44'),
+  heartwood: lin('#c4a477'),
+  fungus: lin('#d9bf8c'),
+  fungusOrange: lin('#c9823e'),
   // ground cover
-  rock: lin('#8a847a'),
-  rockLight: lin('#a19b90'),
-  rockDark: lin('#5d5750'),
-  moss: lin('#5f8434'),
-  fern: lin('#4e8c34'),
-  fernLight: lin('#73ad4a'),
-  bush: lin('#467b2e'),
-  bushLight: lin('#62993c'),
-  blossomWhite: lin('#f4f1e6'),
-  blossomPink: lin('#eaa3c0'),
-  reed: lin('#7d9d4a'),
-  reedDry: lin('#b7a866'),
-  cattail: lin('#5b3a20'),
-  lily: lin('#4f913b'),
-  lilyDark: lin('#3a6f2d'),
-  lotusPink: lin('#f0b6cf'),
-  lotusWhite: lin('#f7f4ea'),
-  // grass (matches terrain tints)
-  grass: lin('#6a9a3e'),
-  meadow: lin('#8fb84f'),
-  forestFloor: lin('#4a6430'),
-  dryGrass: lin('#a8a65a'),
-  duneGrass: lin('#b9b77a'),
+  rock: lin('#8a8378'),
+  rockLight: lin('#a39b8d'),
+  rockDark: lin('#57514a'),
+  moss: lin('#5b7038'),
+  fern: lin('#55793c'),
+  fernLight: lin('#76914f'),
+  bush: lin('#4a6936'),
+  bushLight: lin('#66824a'),
+  blossomWhite: lin('#efeadc'),
+  blossomPink: lin('#dda2b6'),
+  reed: lin('#7e8d50'),
+  reedDry: lin('#ad9f6a'),
+  cattail: lin('#57391f'),
+  lily: lin('#557d40'),
+  lilyDark: lin('#3d5c30'),
+  lotusPink: lin('#e6b3c4'),
+  lotusWhite: lin('#f2eee2'),
+  // grass (matches terrain tints, src/world/fx/terrainColors.js)
+  grass: lin('#718b50'),
+  meadow: lin('#8e9b5c'),
+  forestFloor: lin('#4d5a37'),
+  dryGrass: lin('#a59a5e'),
+  duneGrass: lin('#b2aa7c'),
   // meadow flowers: [petal, center]
   flowers: [
-    [lin('#f6f3ea'), lin('#f2c230')], // daisy
-    [lin('#f4cf2e'), lin('#e09a1c')], // buttercup
-    [lin('#9a6fd0'), lin('#f1d35a')], // violet
-    [lin('#f08fb3'), lin('#f5df7a')], // pink campion
-    [lin('#e23a2c'), lin('#2a1d16')], // poppy
-    [lin('#4f7fe0'), lin('#2c3f86')], // cornflower
-    [lin('#f2913a'), lin('#c9561f')], // orange marigold
+    [lin('#f1ece0'), lin('#e2b63a')], // daisy
+    [lin('#e6c24a'), lin('#cf9228')], // buttercup
+    [lin('#8a70bc'), lin('#e6cb62')], // violet
+    [lin('#de92ad'), lin('#ecd683')], // pink campion
+    [lin('#cc4a3a'), lin('#2a1d16')], // poppy
+    [lin('#5c7fc8'), lin('#2f4079')], // cornflower
+    [lin('#de904c'), lin('#b9582a')], // orange marigold
   ],
 };
 

@@ -10,6 +10,13 @@
 // Primitives: tube (tapered/curved trunks & branches), blob (jittered icosphere crowns & rocks),
 // cone (pine tiers), frond (palm & fern leaves), strip (ribbons: willow strands, reeds), octa (fruit),
 // disc (lily pads). Thin parts are double-sided by adding both windings (the material is FrontSide).
+//
+// Low-detail mode (V4-E tree LOD): while withLowDetail(fn) runs, every new GeoBuilder is in low mode.
+// Tubes and cones then emit fewer sides (lowSides; long tubes also drop every other inner ring), detail-1 blobs emit only their 12 base icosahedron
+// vertices with the detail-0 faces (ICO[1] keeps ICO[0]'s vertices first, so the crown keeps its shape),
+// fronds use half the segments, willow strands become one quad (every other one dropped) and fruit
+// octahedra are skipped. Every primitive still makes exactly the same rng() / colorFn() calls as in
+// full mode, so a variant rebuilt from the same rng fork keeps its branches, blobs and colors.
 
 // ── Icosphere templates (indexed, outward CCW faces) ─────────────────────
 const ICO = (() => {
@@ -50,8 +57,24 @@ const ICO = (() => {
   return [d0, { v: v1, f: f1 }];
 })();
 
+let LOW = false;
+/** Run fn with every GeoBuilder created inside it in low-detail mode (see the header). */
+export function withLowDetail(fn) {
+  const prev = LOW;
+  LOW = true;
+  try {
+    return fn();
+  } finally {
+    LOW = prev;
+  }
+}
+/** Side count of a tube / cone in low-detail mode (7 -> 4 sided trunks, 5 -> 3 sided branches). */
+export const lowSides = (s) => (s >= 6 ? 4 : s >= 4 ? 3 : s);
+
 export class GeoBuilder {
   constructor() {
+    this.lod = LOW; // low-detail mode (fixed at construction)
+    this.strand = 0; // strip counter (low mode keeps every other strip)
     this.p = []; // positions
     this.c = []; // colors
     this.w = []; // bend, flutter
@@ -208,6 +231,7 @@ export function tube(b, pts, sides, colorFn, opts = {}) {
   let N = null;
   const n = pts.length;
   const rng = opts.rng;
+  const S = b.lod ? lowSides(sides) : sides;
   for (let i = 0; i < n; i++) {
     const p = pts[i];
     const pa = pts[Math.max(0, i - 1)], pb = pts[Math.min(n - 1, i + 1)];
@@ -227,11 +251,24 @@ export function tube(b, pts, sides, colorFn, opts = {}) {
     }
     const ring = [];
     const tw = (opts.twist || 0) * i;
+    if (b.lod && n >= 5 && i % 2 === 1 && !last) {
+      // low detail: drop this inner ring, keeping its rng/colorFn calls
+      for (let j = 0; j < sides; j++) {
+        if (rng && opts.jitter) rng();
+        colorFn(i, j, (j / sides) * Math.PI * 2 + tw);
+      }
+      continue;
+    }
     for (let j = 0; j < sides; j++) {
       const a = (j / sides) * Math.PI * 2 + tw;
       const jr = rng && opts.jitter ? 1 + (rng() - 0.5) * 2 * opts.jitter : 1;
+      if (j >= S) {
+        colorFn(i, j, a); // low detail: same calls as the full ring, nothing emitted
+        continue;
+      }
       const r = p.r * jr;
-      const ca = Math.cos(a), sa = Math.sin(a);
+      const ag = S === sides ? a : (j / S) * Math.PI * 2 + tw;
+      const ca = Math.cos(ag), sa = Math.sin(ag);
       ring.push(
         b.v(p.x + (N[0] * ca + B[0] * sa) * r, p.y + (N[1] * ca + B[1] * sa) * r, p.z + (N[2] * ca + B[2] * sa) * r, colorFn(i, j, a))
       );
@@ -271,15 +308,19 @@ export function blob(b, cx, cy, cz, rx, ry, rz, opts) {
   const jitter = opts.jitter ?? 0.15;
   const flat = opts.flatBottom ?? 0.35;
   const base = b.n;
+  // low detail: a detail-1 blob keeps its 12 base vertices (same jitter/colors) and the detail-0 faces
+  const nKeep = b.lod && T === ICO[1] ? ICO[0].v.length : T.v.length;
+  const F = nKeep < T.v.length ? ICO[0].f : T.f;
   for (let i = 0; i < T.v.length; i += 3) {
     let nx = T.v[i], ny = T.v[i + 1], nz = T.v[i + 2];
     const k = 1 + (rng() - 0.5) * 2 * jitter;
     let y = ny;
     if (y < 0) y *= 1 - flat;
     const x = cx + nx * rx * k, yy = cy + y * ry * k, z = cz + nz * rz * k;
-    b.v(x, yy, z, opts.colorFn(nx, ny, nz, x, yy, z));
+    const col = opts.colorFn(nx, ny, nz, x, yy, z);
+    if (i < nKeep) b.v(x, yy, z, col);
   }
-  for (let i = 0; i < T.f.length; i += 3) b.tri(base + T.f[i], base + T.f[i + 1], base + T.f[i + 2]);
+  for (let i = 0; i < F.length; i += 3) b.tri(base + F[i], base + F[i + 1], base + F[i + 2]);
 }
 
 /**
@@ -288,18 +329,21 @@ export function blob(b, cx, cy, cz, rx, ry, rz, opts) {
  */
 export function cone(b, cx, cy, cz, r, h, opts) {
   const sides = opts.sides ?? 7;
+  const S = b.lod ? lowSides(sides) : sides;
   const rng = opts.rng;
   const rot = rng() * Math.PI * 2;
   const rim = [];
   for (let j = 0; j < sides; j++) {
-    const a = rot + (j / sides) * Math.PI * 2;
+    const a = rot + (j / S) * Math.PI * 2;
     const rr = r * (1 + (rng() - 0.5) * 2 * (opts.jitter ?? 0.12));
-    rim.push(b.v(cx + Math.cos(a) * rr, cy - (opts.droop ?? 0) * (0.7 + rng() * 0.6), cz + Math.sin(a) * rr, opts.colRim()));
+    const y = cy - (opts.droop ?? 0) * (0.7 + rng() * 0.6);
+    const col = opts.colRim();
+    if (j < S) rim.push(b.v(cx + Math.cos(a) * rr, y, cz + Math.sin(a) * rr, col)); // low detail: calls only
   }
   const apex = b.v(cx + (rng() - 0.5) * r * 0.1, cy + h, cz + (rng() - 0.5) * r * 0.1, opts.colApex());
   const under = b.v(cx, cy + h * 0.12, cz, opts.colUnder());
-  for (let j = 0; j < sides; j++) {
-    const j1 = (j + 1) % sides;
+  for (let j = 0; j < S; j++) {
+    const j1 = (j + 1) % S;
     b.tri(rim[j], apex, rim[j1]);
     b.tri(rim[j], rim[j1], under);
   }
@@ -311,7 +355,9 @@ export function cone(b, cx, cy, cz, r, h, opts) {
  * opts: { len, width, lift, droop, segs, colBase, colTip, flutter, sideDrop, rng }
  */
 export function frond(b, bx, by, bz, dir, opts) {
-  const { len, width, segs } = opts;
+  const { len, width } = opts;
+  // low detail: half the segments, then burn the rng draws the missing ones would make (3 per segment)
+  const segs = b.lod ? Math.max(2, Math.ceil(opts.segs / 2)) : opts.segs;
   const lift = opts.lift ?? 0.3, droop = opts.droop ?? 0.8;
   const rng = opts.rng;
   const dx = dir[0], dz = dir[1];
@@ -336,6 +382,7 @@ export function frond(b, bx, by, bz, dir, opts) {
     b.tri2(spine[i], L, spine[i + 1]);
     b.tri2(spine[i], spine[i + 1], R);
   }
+  if (rng) for (let k = 3 * (opts.segs - segs); k > 0; k--) rng();
 }
 
 function mixc(a, c, t, rng, k = 1) {
@@ -349,6 +396,7 @@ function mixc(a, c, t, rng, k = 1) {
  */
 export function strip(b, pts, widths, side, colorFn, flutterFn) {
   const n = pts.length;
+  if (b.lod) return stripLow(b, pts, widths, side, colorFn, flutterFn);
   let prevL = -1, prevR = -1;
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);
@@ -370,8 +418,34 @@ export function strip(b, pts, widths, side, colorFn, flutterFn) {
   }
 }
 
-/** Small octahedron (fruit, berries, blossoms). sy stretches it vertically. */
+/** Low-detail strip: the same colorFn/flutterFn calls, one segment from the first to the last point, every other strip skipped. */
+function stripLow(b, pts, widths, side, colorFn, flutterFn) {
+  const n = pts.length;
+  let c0 = null, c1 = null, f0 = 0, f1 = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    const col = colorFn(t);
+    const fl = flutterFn ? flutterFn(t) : 0;
+    if (i === 0) (c0 = col), (f0 = fl);
+    if (i === n - 1) (c1 = col), (f1 = fl);
+  }
+  if ((b.strand++ & 1) === 1 || n < 2) return;
+  const p0 = pts[0], p1 = pts[n - 1];
+  const w0 = widths[0] * 0.5, w1 = widths[n - 1] * 0.5;
+  const L0 = b.v(p0[0] + side[0] * w0, p0[1] + side[1] * w0, p0[2] + side[2] * w0, c0, f0);
+  const R0 = b.v(p0[0] - side[0] * w0, p0[1] - side[1] * w0, p0[2] - side[2] * w0, c0, f0);
+  if (w1 <= 1e-4) {
+    b.tri2(L0, R0, b.v(p1[0], p1[1], p1[2], c1, f1));
+    return;
+  }
+  const L1 = b.v(p1[0] + side[0] * w1, p1[1] + side[1] * w1, p1[2] + side[2] * w1, c1, f1);
+  const R1 = b.v(p1[0] - side[0] * w1, p1[1] - side[1] * w1, p1[2] - side[2] * w1, c1, f1);
+  b.quad2(L0, R0, R1, L1);
+}
+
+/** Small octahedron (fruit, berries, blossoms). sy stretches it vertically. Skipped in low-detail mode. */
 export function octa(b, cx, cy, cz, r, col, sy = 1, flutter = 0) {
+  if (b.lod) return;
   const i0 = b.v(cx + r, cy, cz, col, flutter);
   const i1 = b.v(cx - r, cy, cz, col, flutter);
   const i2 = b.v(cx, cy + r * sy, cz, mulc(col, 1.15), flutter);

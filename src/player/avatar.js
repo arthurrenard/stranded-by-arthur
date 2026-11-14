@@ -1,9 +1,12 @@
 // Remote-player avatar (V4-B, SPEC §12): a low-poly procedural castaway used by src/net/net.js for every other
-// player in the session. No assets: shared BoxGeometry/SphereGeometry parts (~330 triangles per avatar, well under
-// the 700 budget), per-avatar colors (skin tone + hair from the id hash, shirt color passed in), procedural
-// animation (idle breathing, walk/run cycle with arm swing, swim stroke, wave, seated paddle pose), a canvas-sprite
-// name tag that fades beyond 120 m, shadows on. Network samples are buffered and rendered CONFIG.net.interpolationMs
-// in the past so 15 Hz updates look smooth; a short extrapolation covers late packets.
+// player in the session. No assets. V4-D look pass: a smoother silhouette from shared lathe / capsule / sphere
+// parts (egg head on a neck, hair cap with tufts, tapered shirt with sleeves and a ragged hem, shorts, rounded
+// limbs, bare feet), 648 triangles per avatar (680 with the torch; budget 700), softened per-avatar colors (skin tone +
+// hair from the id hash, shirt color passed in and muted toward a warm grey; the tag keeps the original). Parts
+// that share a bone and a material are merged: 16 meshes per avatar (+2 for the torch). Procedural animation (idle
+// breathing, walk/run cycle with arm swing, swim stroke, wave, seated paddle pose), a canvas-sprite name tag that
+// fades beyond 120 m, shadows on. Network samples are buffered and rendered CONFIG.net.interpolationMs in the past
+// so 15 Hz updates look smooth; a short extrapolation covers late packets.
 //
 //   createAvatar(ctx, { name, color, id }) →
 //     { object, setTarget(pos, yaw, pitch, state), update(dt), setName(name), dispose() }
@@ -13,28 +16,55 @@ import { CONFIG } from '../config.js';
 import { angleDelta, colorForId, hashString } from '../net/protocol.js';
 
 const PROP = { hipY: 0.9, thigh: 0.4, shin: 0.38, torso: 0.55, upperArm: 0.3, foreArm: 0.28, headR: 0.13 };
-const SKIN = ['#f1c9a5', '#e0ac7e', '#c68642', '#8d5524', '#5c3a1e', '#f6d9c0'];
-const HAIR = ['#2b1b12', '#4a2c17', '#1a1a1a', '#8b5a2b', '#c9a060', '#5a3b2e'];
+const SKIN = ['#e9c4a2', '#d9a77d', '#bf8550', '#8a5a33', '#5e3f26', '#efd5bd'];
+const HAIR = ['#2e2018', '#4a3020', '#22201e', '#7e5634', '#b8945e', '#5a3e30'];
 const TAG_FAR = 120; // m: name tag fully transparent beyond this
 const TAG_BAND = 25; // m: fade width
 const RING = 32; // buffered network samples
 const EXTRAPOLATE_MS = 250;
 const TAU = Math.PI * 2;
+const SHIRT_MUTE = 0.3; // shirt color pulled this far toward a warm grey (softer, less "UI" colored)
 
 let THREE = null;
 let S = null; // shared geometries + materials (built once per page)
 
-/** Torn shirt hem: 8 ragged triangles hanging from the torso's bottom edge (front + back). */
-function makeHem() {
+/** Merge geometries (indexed or not) into one non-indexed position + normal geometry. */
+function merge(parts) {
+  let n = 0;
+  const flat = parts.map((g) => {
+    const q = g.index ? g.toNonIndexed() : g;
+    if (!q.attributes.normal) q.computeVertexNormals();
+    n += q.attributes.position.count;
+    return q;
+  });
+  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3);
+  let o = 0;
+  for (const q of flat) {
+    pos.set(q.attributes.position.array, o * 3);
+    nor.set(q.attributes.normal.array, o * 3);
+    o += q.attributes.position.count;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  g.computeBoundingSphere();
+  return g;
+}
+
+/** Lathe from [r, y] pairs (bottom -> top), squashed front-to-back by zs. */
+function lathe(pts, seg, zs) {
+  const g = new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), seg);
+  g.scale(1, 1, zs);
+  return g;
+}
+
+/** Torn shirt hem: ragged triangles hanging around the torso's bottom ring (ellipse rx, rz). */
+function makeHem(rx, rz, n = 10) {
   const pos = [];
-  for (const side of [-1, 1]) {
-    const z = side * 0.105;
-    for (let i = 0; i < 4; i++) {
-      const x0 = -0.18 + i * 0.09, x1 = x0 + 0.09, xm = (x0 + x1) / 2;
-      const tip = -(0.05 + ((i * 7 + (side > 0 ? 1 : 0)) % 3) * 0.025);
-      if (side > 0) pos.push(x0, 0, z, x1, 0, z, xm, tip, z);
-      else pos.push(x1, 0, z, x0, 0, z, xm, tip, z);
-    }
+  for (let i = 0; i < n; i++) {
+    const a0 = (i / n) * TAU, a1 = ((i + 1) / n) * TAU, am = (a0 + a1) / 2;
+    const tip = -(0.04 + ((i * 7) % 3) * 0.022);
+    pos.push(Math.cos(a0) * rx, 0.005, Math.sin(a0) * rz, Math.cos(am) * rx * 1.06, tip, Math.sin(am) * rz * 1.06, Math.cos(a1) * rx, 0.005, Math.sin(a1) * rz);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -42,30 +72,72 @@ function makeHem() {
   return g;
 }
 
+/** Capsule limb hanging down from its joint (top at y = 0), total length len. */
+function limb(r, len, seg = 5) {
+  const g = new THREE.CapsuleGeometry(r, Math.max(0.01, len - 2 * r), 1, seg);
+  g.translate(0, -len / 2, 0);
+  return g;
+}
+
 function shared(ctx) {
   if (S) return S;
   THREE = ctx.THREE;
-  const box = (w, h, d, oy = 0) => {
-    const g = new THREE.BoxGeometry(w, h, d);
-    if (oy) g.translate(0, oy, 0);
-    return g;
-  };
+  const R = PROP.headR;
+  // head: slightly egg-shaped, on a short neck (both skin)
+  const skull = new THREE.SphereGeometry(R, 8, 5);
+  skull.scale(0.95, 1.08, 1);
+  skull.translate(0, R + 0.02, 0);
+  const neck = new THREE.CylinderGeometry(0.045, 0.052, 0.09, 5, 1, true);
+  // hair: cap tilted back off the forehead (-z is forward) + a few tufts
+  const hairParts = [];
+  const cap = new THREE.SphereGeometry(R * 1.08, 8, 3, 0, TAU, 0, Math.PI * 0.52);
+  cap.scale(0.97, 1.06, 1.02);
+  hairParts.push(cap);
+  const up = new THREE.Vector3(0, 1, 0), d = new THREE.Vector3(), q = new THREE.Quaternion();
+  for (const [x, y, z, len] of [[0, 1, 0.2, 0.08], [0.45, 0.85, 0.15, 0.07], [-0.42, 0.86, 0.22, 0.07], [0.15, 0.7, -0.7, 0.065], [-0.2, 0.68, -0.7, 0.06], [0.05, 0.6, 0.8, 0.07]]) {
+    d.set(x, y, z).normalize();
+    const t = new THREE.ConeGeometry(0.036, len, 4, 1, true);
+    t.translate(0, len / 2, 0);
+    t.applyQuaternion(q.setFromUnitVectors(up, d));
+    t.translate(d.x * R * 0.95, d.y * R * 1.0, d.z * R * 0.97);
+    hairParts.push(t);
+  }
+  const hair = merge(hairParts);
+  hair.rotateX(0.3);
+  hair.translate(0, R + 0.03, 0);
+  // shirt: tapered torso (waist -> chest -> shoulders -> collar) + ragged hem, squashed front-to-back
+  const torso = merge([
+    lathe([[0.15, 0], [0.163, 0.14], [0.185, 0.32], [0.2, 0.46], [0.17, 0.54], [0.075, 0.585]], 8, 0.62),
+    makeHem(0.15, 0.15 * 0.62),
+  ]);
+  // shorts: waistband -> seat, plus two short leg tubes
+  const shorts = lathe([[0.07, -0.16], [0.155, -0.12], [0.172, 0.0], [0.163, 0.12]], 8, 0.66);
+  const shortLeg = new THREE.CylinderGeometry(0.086, 0.08, 0.21, 5, 1, true);
+  shortLeg.translate(0, -0.075, 0);
+  const sleeve = new THREE.CylinderGeometry(0.066, 0.06, 0.15, 5, 1, false);
+  sleeve.translate(0, -0.045, 0);
+  // hands / bare feet merged into the forearm / shin they hang from
+  const hand = new THREE.SphereGeometry(0.048, 4, 3);
+  hand.scale(0.85, 1.25, 0.6);
+  hand.translate(0, -PROP.foreArm - 0.035, 0);
+  const foot = new THREE.SphereGeometry(0.06, 5, 3);
+  foot.scale(0.85, 0.5, 1.9);
+  foot.translate(0, -PROP.shin - 0.035, -0.045);
   S = {
-    head: new THREE.SphereGeometry(PROP.headR, 7, 5),
-    hair: new THREE.SphereGeometry(PROP.headR * 1.09, 7, 4, 0, TAU, 0, Math.PI * 0.55),
-    torso: box(0.36, PROP.torso, 0.2),
-    hem: makeHem(),
-    hips: box(0.34, 0.24, 0.21),
-    upperArm: box(0.1, PROP.upperArm, 0.1, -PROP.upperArm / 2),
-    foreArm: box(0.09, PROP.foreArm, 0.09, -PROP.foreArm / 2),
-    hand: box(0.09, 0.09, 0.05, -PROP.foreArm - 0.04),
-    thigh: box(0.14, PROP.thigh, 0.14, -PROP.thigh / 2),
-    shin: box(0.12, PROP.shin, 0.12, -PROP.shin / 2),
-    foot: box(0.12, 0.07, 0.22),
+    head: merge([skull, neck]),
+    hair,
+    torso,
+    shorts,
+    shortLeg,
+    sleeve,
+    upperArm: limb(0.047, PROP.upperArm),
+    foreArm: merge([limb(0.042, PROP.foreArm), hand]),
+    thigh: limb(0.064, PROP.thigh),
+    shin: merge([limb(0.055, PROP.shin), foot]),
     stick: new THREE.CylinderGeometry(0.015, 0.022, 0.42, 5),
     flame: new THREE.ConeGeometry(0.06, 0.16, 6),
     flameMat: new THREE.MeshBasicMaterial({ color: 0xffa432 }),
-    stickMat: new THREE.MeshLambertMaterial({ color: 0x5a3b22 }),
+    stickMat: new THREE.MeshLambertMaterial({ color: 0x4e3420 }),
   };
   return S;
 }
@@ -106,9 +178,12 @@ export function createAvatar(ctx, { name = 'Castaway', color, id = name } = {}) 
   const G = shared(ctx);
   const h = hashString(id);
   color = color || colorForId(id);
+  // softened copies for the clothes (the tag + `color` getter keep the original)
+  const shirtC = new THREE.Color(color).lerp(new THREE.Color(0x8a8072), SHIRT_MUTE);
+  const shortsC = new THREE.Color(color).multiplyScalar(0.5).lerp(new THREE.Color(0x5b5446), 0.6);
   const skinMat = new THREE.MeshLambertMaterial({ color: SKIN[h % SKIN.length] });
-  const shirtMat = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide });
-  const shortsMat = new THREE.MeshLambertMaterial({ color: new THREE.Color(color).multiplyScalar(0.45) });
+  const shirtMat = new THREE.MeshLambertMaterial({ color: shirtC, side: THREE.DoubleSide });
+  const shortsMat = new THREE.MeshLambertMaterial({ color: shortsC, side: THREE.DoubleSide });
   const hairMat = new THREE.MeshLambertMaterial({ color: HAIR[(h >>> 8) % HAIR.length] });
   const mats = [skinMat, shirtMat, shortsMat, hairMat];
 
@@ -131,29 +206,28 @@ export function createAvatar(ctx, { name = 'Castaway', color, id = name } = {}) 
   object.name = 'avatar:' + id;
   object.visible = false;
   const hips = group(object, 0, PROP.hipY, 0);
-  mesh(G.hips, shortsMat, hips, 0, -0.02, 0);
-  const torso = mesh(G.torso, shirtMat, hips, 0, 0.1 + PROP.torso / 2, 0);
-  mesh(G.hem, shirtMat, torso, 0, -PROP.torso / 2, 0);
+  mesh(G.shorts, shortsMat, hips);
+  // torso origin at the waist: the breathing scale.y grows it upward from the belt
+  const torso = mesh(G.torso, shirtMat, hips, 0, 0.08, 0);
   const neckY = 0.1 + PROP.torso;
   const head = group(hips, 0, neckY + 0.03, 0);
-  mesh(G.head, skinMat, head, 0, PROP.headR + 0.02, 0);
-  const hair = mesh(G.hair, hairMat, head, 0, PROP.headR + 0.03, 0);
-  hair.rotation.x = 0.3;
+  mesh(G.head, skinMat, head);
+  mesh(G.hair, hairMat, head);
 
   const arm = (side) => {
-    const shoulder = group(hips, side * 0.23, neckY - 0.04, 0);
-    mesh(G.upperArm, shirtMat, shoulder);
+    const shoulder = group(hips, side * 0.215, neckY - 0.05, 0);
+    mesh(G.sleeve, shirtMat, shoulder);
+    mesh(G.upperArm, skinMat, shoulder);
     const elbow = group(shoulder, 0, -PROP.upperArm, 0);
     mesh(G.foreArm, skinMat, elbow);
-    mesh(G.hand, skinMat, elbow);
     return { shoulder, elbow };
   };
   const leg = (side) => {
-    const hip = group(hips, side * 0.1, 0, 0);
+    const hip = group(hips, side * 0.095, 0, 0);
+    mesh(G.shortLeg, shortsMat, hip);
     mesh(G.thigh, skinMat, hip);
     const knee = group(hip, 0, -PROP.thigh, 0);
     mesh(G.shin, skinMat, knee);
-    mesh(G.foot, skinMat, knee, 0, -PROP.shin - 0.035, -0.04);
     return { hip, knee };
   };
   const armL = arm(-1), armR = arm(1), legL = leg(-1), legR = leg(1);

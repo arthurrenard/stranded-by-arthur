@@ -4,6 +4,8 @@
 //     island along the wind, each tree sways with its own phase, leaves flutter. Trunks are stiff
 //     (bend weight 0 at the base, see species.js bendBy); palms carry larger weights so they bend more.
 //   - leaf translucency: leaves glow warmly when you look toward the sun through them.
+//   - V4-D: per-plant color jitter (value +-8 %, hue +-3 %, keyed on the per-plant phase aWind.z) and a soft
+//     warm rim / wrap sheen on leaves facing the sun.
 //   - flowers (aClose attribute): petals fold up at night, driven by ctx.uniforms.uDaylight.
 //   - grass (instanced): fades out at the patch edge, sways in waves, bends away from the player.
 // The same vertex patch runs in a shared MeshDepthMaterial so shadows sway with the trees.
@@ -67,6 +69,7 @@ const WIND_APPLY = /* glsl */ `
 const LEAF_VARYINGS = /* glsl */ `
 varying vec3 vFloraWP;
 varying float vFloraLeaf;
+varying float vFloraPh;
 `;
 
 const LEAF_VARY_SET = /* glsl */ `
@@ -77,16 +80,41 @@ const LEAF_VARY_SET = /* glsl */ `
     vFloraWP = (modelMatrix * vec4(transformed, 1.0)).xyz;
   #endif
   vFloraLeaf = aWind.w;
+  vFloraPh = aWind.z;
 }
 `;
 
-/** Back-lit leaves: warm glow when looking toward the sun through foliage. */
+/** Per-plant color jitter (aWind.z = per-plant random phase; 0 = props without wind data: untouched). */
+const JITTER_FRAG = /* glsl */ `
+{
+  float fOn = step(1e-5, vFloraPh);
+  float fH1 = fract(sin(vFloraPh * 91.37 + 1.3) * 43758.55);
+  float fH2 = fract(sin(vFloraPh * 57.11 + 4.7) * 24634.63);
+  float fLeafK = clamp(vFloraLeaf * 4.0, 0.0, 1.0);
+  // hue +-3 % of the wheel (~ +-0.19 rad) on leaves, rotation about the grey axis
+  float fA = (fH2 - 0.5) * 0.38 * fLeafK * fOn;
+  vec3 fK = vec3(0.57735);
+  vec3 fC = diffuseColor.rgb;
+  float fCa = cos(fA), fSa = sin(fA);
+  fC = fC * fCa + cross(fK, fC) * fSa + fK * dot(fK, fC) * (1.0 - fCa);
+  // value +-8 % (leaves), +-5 % (bark)
+  diffuseColor.rgb = max(fC, 0.0) * (1.0 + (fH1 - 0.5) * mix(0.1, 0.16, fLeafK) * fOn);
+}
+`;
+
+/** Back-lit leaves: warm glow when looking toward the sun through foliage, plus a soft sun-side rim. */
 const LEAF_FRAG = /* glsl */ `
 {
   vec3 fV = normalize(vFloraWP - cameraPosition);
-  float fDot = max(dot(fV, normalize(uSunDir)), 0.0);
+  vec3 fL = normalize(uSunDir);
+  float fDot = max(dot(fV, fL), 0.0);
   float fBack = pow(fDot, 7.0) * 0.9 + pow(fDot, 2.0) * 0.18;
-  totalEmissiveRadiance += diffuseColor.rgb * uSunColor * (vFloraLeaf * fBack);
+  // fake translucency/rim: grazing edges of sun-facing leaves pick up a warm sheen (view space)
+  vec3 fLv = normalize((viewMatrix * vec4(fL, 0.0)).xyz);
+  float fFace = max(dot(normal, fLv), 0.0);
+  float fRim = pow(1.0 - max(dot(normal, normalize(vViewPosition)), 0.0), 3.0);
+  float fSheen = fFace * (0.55 * fRim + 0.1) * clamp(fL.y * 6.0, 0.0, 1.0); // none once the sun has set
+  totalEmissiveRadiance += diffuseColor.rgb * uSunColor * vec3(1.06, 1.0, 0.72) * (vFloraLeaf * (fBack + fSheen));
 }
 `;
 
@@ -138,9 +166,10 @@ uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 ${LEAF_VARYINGS}`
         )
+        .replace('#include <color_fragment>', `#include <color_fragment>\n${JITTER_FRAG}`)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${LEAF_FRAG}`);
     };
-    m.customProgramCacheKey = () => key + (close ? '+close' : '');
+    m.customProgramCacheKey = () => key + (close ? '+close' : '') + '+v4d';
     return m;
   }
 
@@ -174,7 +203,8 @@ ${LEAF_VARYINGS}`
 ${WIND_PARS}
 uniform vec3 uGrassCenter;
 uniform float uGrassRadius;
-uniform vec3 uPlayer;`
+uniform vec3 uPlayer;
+varying vec2 vGrassJ;`
         )
         .replace(
           '#include <begin_vertex>',
@@ -203,10 +233,20 @@ uniform vec3 uPlayer;`
   fD.xz += fAway / max(fDp, 1e-3) * fPush * fH * 0.75;
   fD.y -= fPush * fH * 0.45;
   transformed += transpose(fR) * fD / fS2;
+  // per-tuft jitter seeds (V4-D)
+  vGrassJ = fract(sin(vec2(dot(fBase.xz, vec2(12.9898, 78.233)), dot(fBase.xz, vec2(39.346, 11.135)))) * 43758.55);
 }`
         );
-      // keep the up-facing normal on both sides (no dark back faces)
-      shader.fragmentShader = shader.fragmentShader.replace(
+      // keep the up-facing normal on both sides (no dark back faces); per-tuft value/hue jitter
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec2 vGrassJ;')
+        .replace(
+          '#include <color_fragment>',
+          `#include <color_fragment>
+diffuseColor.rgb *= 1.0 + (vGrassJ.x - 0.5) * 0.16;
+diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.08, 1.0, 0.8), (vGrassJ.y - 0.5) * 0.7);`
+        )
+        .replace(
         '#include <normal_fragment_begin>',
         `#include <normal_fragment_begin>
 #ifndef FLAT_SHADED
@@ -214,7 +254,7 @@ uniform vec3 uPlayer;`
 #endif`
       );
     };
-    m.customProgramCacheKey = () => 'flora-grass';
+    m.customProgramCacheKey = () => 'flora-grass+v4d';
     return m;
   }
 

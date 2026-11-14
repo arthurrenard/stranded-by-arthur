@@ -30,6 +30,20 @@ Open **http://localhost:5173** and click **Click to begin**. Headphones recommen
 - **Checks:** `npm run check` (syntax-checks and imports all 77 source files, then runs the 8 unit-test suites).
 - If `npm install` fails with `EACCES` on `~/.npm`, use a fresh cache: `npm install --cache /tmp/npm-cache-stranded`.
 
+## New in v4
+- **Fishing.** Cast at any water with a fishing rod (R), wait 20–45 s for a bite, hook it with **Space**, then tap Space to reel
+  without snapping the line. Lose it and the fish is gone (and the biggest ones can take your rod). Grill fish at a campfire for big meals.
+- **Summit survey.** Reach the top of the main island's mountain for a drone-style 360° shot of the island. Replay it any time from
+  the middle of the stone circle (it's even better during the night-sky show).
+- **The rune puzzle.** At night the standing stones on the summit can be touched. Three clues are hidden around the islands; light
+  the right four and something enormous happens.
+- **Multiplayer (early).** Pause → Multiplayer: create a session and share the 6-letter code, or join one. Players see each other,
+  share gathered resources, fires, structures, the boat and the clock; Enter chats, P lists players. Solo play is unchanged.
+  Hosting your own server costs a few dollars a month: see [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md).
+- **Graphics setting** (Pause → Graphics: Low / Medium / High) and automatic resolution scaling; distant trees use low-detail models.
+- Coconuts are less filling; a falling coconut now usually knocks you out for 4 hours instead of killing you (35 % it still does).
+- The intro crash keeps the boat in one piece, the wind is smoother, alerts never overlap, and the in-game look is warmer and less saturated.
+
 ## Controls
 
 | Key | Action |
@@ -48,6 +62,8 @@ Open **http://localhost:5173** and click **Click to begin**. Headphones recommen
 | **T** | Light / stow a torch |
 | **G** (hold) | Wave your arms at the search party |
 | **N** | Mute |
+| **Space** (fishing) | Hook the bite, then tap to reel |
+| **Enter** / **P** | Multiplayer chat / player list |
 | **Esc** | Pause (mouse sensitivity and volume sliders) |
 
 ## Quick survival guide (spoiler-light)

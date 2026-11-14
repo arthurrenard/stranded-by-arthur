@@ -176,7 +176,8 @@ export function create(ctx) {
     if (aboard && !selected) return null;
     const sec = { label: 'Cast the line', onUse: cast };
     if (s.fresh && !selected) return { label: '', secondary: sec, score: 0.5 };
-    return { label: 'Cast the line', onUse: cast, secondary: sec, score: selected ? 1.6 : 0.65 };
+    // one prompt line: E casts (R also works through the secondary key, but don't print it twice)
+    return { label: 'Cast the line', onUse: cast, secondary: null, score: selected ? 1.6 : 0.65 };
   }
 
   // ── Actions ─────────────────────────────────────────────────────────────────────────────────────────────

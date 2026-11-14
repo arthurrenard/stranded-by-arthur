@@ -445,9 +445,23 @@ export function createButterflies(ctx, shared) {
         refreshMothSources();
       }
       for (let k = NB; k < N; k++) updateMoth(bugs[k], dt, fr);
-      for (let k = 0; k < N; k++) write(bugs[k]);
-      mesh.instanceMatrix.needsUpdate = true;
-      aFlap.needsUpdate = true;
+      // V4-E: draw only bugs within fr.near2 of the camera; no draw call / upload while none is
+      let live = 0;
+      for (let k = 0; k < N; k++) {
+        const b = bugs[k];
+        const dx = b.x - fr.camX, dy = b.y - fr.camY, dz = b.z - fr.camZ;
+        if (b.state === S_HIDDEN || b.vis < 0.01 || !(dx * dx + dy * dy + dz * dz < fr.near2)) {
+          if (mesh.visible) mesh.setMatrixAt(b.i, zero); // slots stay zero while the mesh is hidden
+          continue;
+        }
+        write(b);
+        live++;
+      }
+      if (live > 0 || mesh.visible) {
+        mesh.instanceMatrix.needsUpdate = true;
+        aFlap.needsUpdate = true;
+      }
+      mesh.visible = live > 0;
     },
     count: () => bugs.filter((b) => b.state !== S_HIDDEN).length,
     /** Debug: state histogram, e.g. __game.fauna.debug('butterflies') */

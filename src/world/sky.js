@@ -55,9 +55,12 @@ void main() {
   float y = dir.y;
   float yc = max(y, 0.0);
   // base gradient
-  vec3 col = mix(uHorizon, uZenith, pow(yc, 0.55));
+  // V4-D: wider, softer horizon haze (exponent 0.55 -> 0.72) and deeper zenith
+  vec3 col = mix(uHorizon, uZenith, pow(yc, 0.72));
   float sd = dot(dir, uSunDir);
   float sdp = max(sd, 0.0);
+  // low warm haze leaning toward the sun's side of the sky
+  col = mix(col, mix(uHorizon, uGlowColor, 0.35), exp(-yc * 7.0) * (0.1 + 0.16 * sdp));
   // sunrise / sunset glow hugging the horizon, strongest toward the sun
   float band = exp(-yc * 4.5);
   col = mix(col, uGlowColor, clamp(uSunsetAmt * band * (0.22 + 0.78 * pow(sdp, 3.0)), 0.0, 1.0));

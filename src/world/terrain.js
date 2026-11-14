@@ -6,7 +6,7 @@
 // wilder colors: dark wet rock, wind-swept grass). API: { mesh, mesh2, meshes, material }.
 import * as THREE from 'three';
 import { createNoise2D } from 'simplex-noise';
-import { terrainColor } from './fx/terrainColors.js';
+import { terrainColor, PAL as TPAL, srgbToLinear } from './fx/terrainColors.js';
 import { worldShared } from './fx/shared.js';
 import { NOISE_GLSL } from './fx/glsl.js';
 
@@ -27,6 +27,10 @@ export function create(ctx) {
   const WET_ROCK = [0.2, 0.215, 0.235]; // linear
   const SWEPT = [0.19, 0.25, 0.12]; // linear grey-olive
   const WIND = { x: 0.8, z: -0.6 }; // streak direction of the flattened grass (prevailing gale)
+  // V4-D: extra shading inputs for terrainColor (broad noise, sun-facing aspect, concavity AO)
+  const ext = { n0: 0, sun: 0, cav: 0 };
+  const AO_D = 3; // m: finite-difference step for the slope aspect + concavity
+  const DAMP = TPAL.damp.map(srgbToLinear); // under-canopy floor (linear)
 
   /** Per-vertex biome colors (color) + shader biome data (aBiome) for one terrain geometry. */
   function colorize(geo, wild) {
@@ -57,7 +61,19 @@ export function create(ctx) {
         const rv = W.riverAt?.(x, z);
         if (rv && rv.d < rv.w * 2.5 && rv.surface > 0.05) fresh = Math.min(fresh, h - rv.surface);
       }
-      terrainColor(b, n1, n2, n3, fresh, rgb);
+      if (h >= -3) {
+        // slope aspect (+z faces the sun all day, see core/clock.js) and concavity (gullies > 0)
+        const hx1 = W.heightAt(x + AO_D, z), hx0 = W.heightAt(x - AO_D, z);
+        const hz1 = W.heightAt(x, z + AO_D), hz0 = W.heightAt(x, z - AO_D);
+        const gx = (hx1 - hx0) / (2 * AO_D), gz = (hz1 - hz0) / (2 * AO_D);
+        ext.sun = Math.max(-1, Math.min(1, (-gz / Math.sqrt(gx * gx + 1 + gz * gz)) / 0.35));
+        ext.cav = (hx1 + hx0 + hz1 + hz0) * 0.25 - h;
+      } else {
+        ext.sun = 0;
+        ext.cav = 0;
+      }
+      ext.n0 = nLow(x * 0.0032 + 71.3, z * 0.0032 - 19.7);
+      terrainColor(b, n1, n2, n3, fresh, rgb, ext);
       if (wild && h >= -3) {
         // wet dark rock on cliffs and the peak, streaked by runoff
         const wr = Math.min(1, b.rock * 1.15) * (0.75 + 0.25 * n2);
@@ -160,6 +176,8 @@ float tN1 = wNoise(vTWorld.xz * 1.7);
 float tN2 = wNoise(vTWorld.xz * 0.21 + 13.0);
 float tN3 = wNoise(vTWorld.xz * 0.045 - 7.0);
 float tVar = (tN1 - 0.5) * 0.22 * tGrass * tFade + (tN2 - 0.5) * 0.12 + (tN3 - 0.5) * 0.1;
+// clump-scale warm/cool hue drift on grass (straw vs sage), no texture
+diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.07, 1.0, 0.84), (tN2 - 0.45) * 0.9 * tGrass);
 // wind-blown sand ripples
 float tRip = sin(dot(vTWorld.xz, vec2(1.9, 1.15)) + tN2 * 5.0);
 tVar += tRip * 0.035 * vTBiome.x * (1.0 - vTBiome.y) * tFade;
@@ -205,7 +223,7 @@ diffuseColor.rgb *= 1.0 - 0.24 * tWet;`
 }`
       );
   };
-  material.customProgramCacheKey = () => 'world-terrain-v1';
+  material.customProgramCacheKey = () => 'world-terrain-v2';
 
   const mesh = new THREE.Mesh(geo, material);
   mesh.name = 'terrain';
@@ -228,14 +246,56 @@ diffuseColor.rgb *= 1.0 - 0.24 * tWet;`
 
   let wet = 0;
 
+  // V4-D: darker, damper floor under the tree crowns. Flora indexes its crowns at create() and is
+  // added after terrain, so this runs at init (retried on the first few updates if flora is late).
+  let canopyTries = 0;
+  function shadeCanopy() {
+    const canopyAt = ctx.flora?.canopyAt;
+    if (typeof canopyAt !== 'function') return false;
+    for (const g of mesh2 ? [geo, geo2] : [geo]) {
+      const pos = g.attributes.position.array;
+      const col = g.attributes.color.array;
+      const bio = g.attributes.aBiome.array;
+      for (let k = 0, n = pos.length / 3; k < n; k++) {
+        const h = pos[k * 3 + 1];
+        if (h < 0.15 || bio[k * 4 + 3] > 0) continue; // sea floor / under water
+        const grass = (1 - bio[k * 4]) * (1 - bio[k * 4 + 1]);
+        if (grass < 0.05) continue;
+        const cv = Number(canopyAt.call(ctx.flora, pos[k * 3], pos[k * 3 + 2])) || 0;
+        if (cv < 0.02) continue;
+        const t = Math.min(1, cv) * 0.6 * grass;
+        const i = k * 3;
+        col[i] += (DAMP[0] - col[i]) * t;
+        col[i + 1] += (DAMP[1] - col[i + 1]) * t;
+        col[i + 2] += (DAMP[2] - col[i + 2]) * t;
+      }
+      g.attributes.color.needsUpdate = true;
+    }
+    return true;
+  }
+
   return {
     mesh,
     /** Tempest Isle terrain (v3), or null. */
     mesh2,
     meshes: mesh2 ? [mesh, mesh2] : [mesh],
     material,
-    init() {},
+    init() {
+      try {
+        if (shadeCanopy()) canopyTries = -1;
+      } catch (e) {
+        canopyTries = -1;
+        console.warn('[terrain] canopy shading skipped', e);
+      }
+    },
     update(dt) {
+      if (canopyTries >= 0 && canopyTries++ < 5) {
+        try {
+          if (shadeCanopy()) canopyTries = -1;
+        } catch (e) {
+          canopyTries = -1;
+        }
+      }
       // ground wetness: soaks quickly in rain, dries slowly (faster in the sun)
       const rain = ctx.weather?.rain ?? 0;
       const day = ctx.time?.daylight ?? 1;

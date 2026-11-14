@@ -11,16 +11,18 @@ export const smooth = (e0, e1, x) => {
 
 // zenith, horizon (= fog), sunset glow, sun light color, cloud lit side, cloud shadow side,
 // hemisphere sky color, hemisphere ground color
+// V4-D art pass: warmer key light at golden hour, cooler + dimmer hemisphere fill (shadows read), deeper zenith,
+// softer warm-grey horizon haze. Night frames unchanged (navigable).
 const KEYS = [
   { e: -1.0, zen: 0x040a1a, hor: 0x0e1a34, glow: 0x0e1a34, sun: 0xff7a40, cLit: 0x1c2436, cDark: 0x0c1220, hSky: 0x4a64b0, hGnd: 0x161e2e },
   { e: -0.3, zen: 0x060f28, hor: 0x13223f, glow: 0x172443, sun: 0xff7a40, cLit: 0x222c42, cDark: 0x0e1424, hSky: 0x4a64b0, hGnd: 0x161e2e },
-  { e: -0.14, zen: 0x111b44, hor: 0x2c3462, glow: 0x4a3a6a, sun: 0xff6a3a, cLit: 0x3a3a5c, cDark: 0x1a1d34, hSky: 0x5466a8, hGnd: 0x1c2230 },
-  { e: -0.05, zen: 0x24346a, hor: 0x7a5c7c, glow: 0xd07a60, sun: 0xff6a3a, cLit: 0xb07a7c, cDark: 0x4a3e5a, hSky: 0x8a7aa8, hGnd: 0x2a2a30 },
-  { e: 0.01, zen: 0x3d5a98, hor: 0xd7967c, glow: 0xffa050, sun: 0xff9a50, cLit: 0xffc49a, cDark: 0x8a6a7a, hSky: 0xc8a8a0, hGnd: 0x4a4436 },
-  { e: 0.08, zen: 0x5584c2, hor: 0xeec39c, glow: 0xffc070, sun: 0xffc080, cLit: 0xfff0dc, cDark: 0xa89aa0, hSky: 0xd6d0c8, hGnd: 0x5e5a40 },
-  { e: 0.2, zen: 0x4f88cf, hor: 0xc6d9e4, glow: 0xffe2b4, sun: 0xffe6c4, cLit: 0xfffaf4, cDark: 0xa8b0bc, hSky: 0xc4d8ee, hGnd: 0x68663f },
-  { e: 0.45, zen: 0x3f80d4, hor: 0xadcde8, glow: 0xfff0d8, sun: 0xfff4e4, cLit: 0xffffff, cDark: 0xaeb8c6, hSky: 0xbcd4f0, hGnd: 0x6a6a44 },
-  { e: 1.0, zen: 0x3577cf, hor: 0xa4c7e8, glow: 0xfff6e8, sun: 0xfffaf2, cLit: 0xffffff, cDark: 0xb0bac8, hSky: 0xb8d2f0, hGnd: 0x6a6a44 },
+  { e: -0.14, zen: 0x101a42, hor: 0x2c3260, glow: 0x4a3868, sun: 0xff6a3a, cLit: 0x3a385a, cDark: 0x1a1c34, hSky: 0x5264a6, hGnd: 0x1c2230 },
+  { e: -0.05, zen: 0x22315f, hor: 0x7a5a78, glow: 0xc8705a, sun: 0xff6a3a, cLit: 0xa8727a, cDark: 0x463a58, hSky: 0x7c74a2, hGnd: 0x2a2830 },
+  { e: 0.01, zen: 0x37528f, hor: 0xd99273, glow: 0xff9848, sun: 0xff8c46, cLit: 0xffbe92, cDark: 0x86667a, hSky: 0xa49eb6, hGnd: 0x4a4034 },
+  { e: 0.08, zen: 0x4a77b8, hor: 0xe8bb94, glow: 0xffb868, sun: 0xffb066, cLit: 0xffe4c6, cDark: 0x9c8e9a, hSky: 0xaab9d0, hGnd: 0x5a4f38 },
+  { e: 0.2, zen: 0x3e77c4, hor: 0xc4d0d8, glow: 0xffdaa8, sun: 0xffdab0, cLit: 0xfff5e8, cDark: 0xa2a8b6, hSky: 0xa6c0e0, hGnd: 0x5e583c },
+  { e: 0.45, zen: 0x3170c6, hor: 0xb2c9d8, glow: 0xffead0, sun: 0xffead4, cLit: 0xffffff, cDark: 0xa8b2c2, hSky: 0xa4bee0, hGnd: 0x605c3e },
+  { e: 1.0, zen: 0x2b69c0, hor: 0xaac3d8, glow: 0xfff2e2, sun: 0xfff1e0, cLit: 0xffffff, cDark: 0xaab4c4, hSky: 0xa2bce0, hGnd: 0x605c3e },
 ];
 const FIELDS = ['zen', 'hor', 'glow', 'sun', 'cLit', 'cDark', 'hSky', 'hGnd'];
 const KEYS_RGB = KEYS.map((k) => {
@@ -38,6 +40,13 @@ const OVC = {
   hSkyDay: hex(0xb6c0ca),
 };
 
+function scale3(out, a, k) {
+  out[0] = a[0] * k;
+  out[1] = a[1] * k;
+  out[2] = a[2] * k;
+  return out;
+}
+
 function lerp3(out, a, b, t) {
   out[0] = a[0] + (b[0] - a[0]) * t;
   out[1] = a[1] + (b[1] - a[1]) * t;
@@ -47,11 +56,17 @@ function lerp3(out, a, b, t) {
 
 /** Fresh output object for skyState(). */
 export function makeSkyState() {
-  const o = { sunI: 0, moonI: 0, hemiI: 0, ambI: 0, fogDensity: 0, starVis: 0, sunsetAmt: 0, sunVis: 0, overcast: 0, dayAmt: 0, cloudShadow: 0 };
+  const o = { golden: 0, sunI: 0, moonI: 0, hemiI: 0, ambI: 0, fogDensity: 0, starVis: 0, sunsetAmt: 0, sunVis: 0, overcast: 0, dayAmt: 0, cloudShadow: 0 };
   for (const f of FIELDS) o[f] = [0, 0, 0];
   o.amb = [0, 0, 0];
   o._a = [0, 0, 0];
   o._b = [0, 0, 0];
+  // scratch (no per-frame allocations)
+  o._sz = [0, 0, 0];
+  o._sh = [0, 0, 0];
+  o._cl = [0, 0, 0];
+  o._cd = [0, 0, 0];
+  o._t = [0, 0, 0];
   return o;
 }
 
@@ -82,7 +97,7 @@ export function skyState(e, moonY, cloud, storm, rain, moonIllum, out) {
   const oz = lerp3(out._a, OVC.nightZen, OVC.dayZen, dayAmt);
   const oh = lerp3(out._b, OVC.nightHor, OVC.dayHor, dayAmt);
   if (storm > 0) {
-    const sz = [0, 0, 0], sh = [0, 0, 0];
+    const sz = out._sz, sh = out._sh;
     lerp3(sz, OVC.stormNightZen, OVC.stormZen, dayAmt);
     lerp3(sh, OVC.stormNightHor, OVC.stormHor, dayAmt);
     lerp3(oz, oz, sz, storm);
@@ -93,27 +108,32 @@ export function skyState(e, moonY, cloud, storm, rain, moonIllum, out) {
   lerp3(out.glow, out.glow, out.hor, overcast * 0.85);
 
   // clouds
-  const cl = [0, 0, 0], cd = [0, 0, 0];
+  const cl = out._cl, cd = out._cd;
   lerp3(cl, OVC.cLitNight, OVC.cLitDay, dayAmt);
   lerp3(cd, OVC.cDarkNight, OVC.cDarkDay, dayAmt);
   const grey = smooth(0.45, 1.0, cloud) * 0.8;
   lerp3(out.cLit, out.cLit, cl, grey);
   lerp3(out.cDark, out.cDark, cd, grey);
   if (storm > 0) {
-    lerp3(out.cLit, out.cLit, OVC.cLitStorm.map((v) => v * (0.25 + 0.75 * dayAmt)), storm);
-    lerp3(out.cDark, out.cDark, OVC.cDarkStorm.map((v) => v * (0.25 + 0.75 * dayAmt)), storm);
+    const k = 0.25 + 0.75 * dayAmt;
+    lerp3(out.cLit, out.cLit, scale3(out._t, OVC.cLitStorm, k), storm);
+    lerp3(out.cDark, out.cDark, scale3(out._t, OVC.cDarkStorm, k), storm);
   }
 
   // hemisphere: greyer under overcast
-  lerp3(out.hSky, out.hSky, OVC.hSkyDay.map((v) => v * (0.3 + 0.7 * dayAmt)), overcast * 0.7);
+  lerp3(out.hSky, out.hSky, scale3(out._t, OVC.hSkyDay, 0.3 + 0.7 * dayAmt), overcast * 0.7);
 
   // light intensities (physical units, three r155+)
   const sunUp = smooth(-0.04, 0.16, e);
   out.sunVis = smooth(-0.03, 0.03, e) * (1 - overcast * 0.95);
-  out.sunI = 3.0 * sunUp * (1 - 0.8 * Math.pow(cloud, 1.3)) * (1 - 0.3 * storm);
+  // gentle golden-hour boost (low warm sun reads stronger against the cooler fill)
+  const golden = smooth(-0.01, 0.05, e) * smooth(0.34, 0.1, e);
+  out.golden = golden;
+  out.sunI = 3.05 * sunUp * (1 + 0.22 * golden) * (1 - 0.8 * Math.pow(cloud, 1.3)) * (1 - 0.3 * storm);
   const night = smooth(0.02, -0.14, e);
   out.moonI = 0.8 * night * smooth(-0.05, 0.15, moonY) * (0.55 + 0.45 * moonIllum) * (1 - 0.6 * cloud);
-  out.hemiI = (0.85 + 0.25 * dayAmt) * (1 - 0.25 * storm * dayAmt) + 0.15 * overcast * dayAmt;
+  // fill: night floor ~0.86 kept (navigable); lower by clear day so shadows read, back up under overcast
+  out.hemiI = (0.86 - 0.1 * dayAmt) * (1 - 0.25 * storm * dayAmt) + 0.3 * overcast * dayAmt;
   out.amb[0] = 0.23 + 0.77 * dayAmt;
   out.amb[1] = 0.31 + 0.69 * dayAmt;
   out.amb[2] = 0.54 + 0.46 * dayAmt;
@@ -125,7 +145,7 @@ export function skyState(e, moonY, cloud, storm, rain, moonIllum, out) {
   out.starVis = smooth(-0.02, -0.18, e) * (1 - storm);
   // fog: light by day, a little morning/evening haze, denser in rain/storm
   const haze = smooth(-0.05, 0.05, e) * smooth(0.28, 0.06, e);
-  out.fogDensity = 0.00105 + 0.0009 * haze + 0.00025 * (1 - dayAmt) + 0.0004 * cloud + 0.0038 * rain + 0.0028 * storm;
+  out.fogDensity = 0.00105 + 0.0011 * haze + 0.00025 * (1 - dayAmt) + 0.0004 * cloud + 0.0038 * rain + 0.0028 * storm;
   // moving cloud shadows on the ground when partly cloudy
   out.cloudShadow = 0.5 * smooth(0.1, 0.4, cloud) * (1 - smooth(0.75, 1.0, cloud)) * sunUp;
   return out;

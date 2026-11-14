@@ -5,6 +5,8 @@
 // The shader (materials.makeGrass) shrinks tufts toward the patch edge, sways them in rolling waves
 // and bends them away from the player's legs. No grass on sand (except sparse dune grass on the
 // upper beach), rock, steep slopes or in water.
+// V4-E: setScale(radiusK, densityK) (flora, from ctx.quality) rebuilds the patch with fewer cells
+// (11 / 9 / 7 per side) and fewer tuft slots per cell (uniform subsample of each cell's tufts).
 import * as THREE from 'three';
 import { hash2, smoothstep } from '../../core/util.js';
 import { BEND_MAX, FLUTTER_MAX } from './bake.js';
@@ -92,10 +94,20 @@ export class GrassPatch {
     this.W = ctx.world;
     this.mats = mats;
     this.cache = new Map();
+    this.N = N; // cells per side (odd)
+    this.H = H;
+    this.KS = K; // tuft slots per cell
+    this.density = 1;
     this.slotKey = new Float64Array(N * N).fill(NaN);
     this.center = [NaN, NaN];
-    const geo = buildTuft();
-    const mesh = new THREE.InstancedMesh(geo, mats.grass, N * N * K);
+    this.geo = buildTuft();
+    this.mesh = this.makeMesh();
+    mats.uniforms.uGrassRadius.value = RADIUS;
+    this._p = new THREE.Vector3();
+  }
+
+  makeMesh() {
+    const mesh = new THREE.InstancedMesh(this.geo, this.mats.grass, this.N * this.N * this.KS);
     mesh.name = 'flora-grass';
     mesh.frustumCulled = false; // re-centered every few meters; the shader fades the edge
     mesh.castShadow = false;
@@ -105,9 +117,33 @@ export class GrassPatch {
     mesh.setColorAt(0, new THREE.Color(1, 1, 1));
     mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
     mesh.visible = false;
+    return mesh;
+  }
+
+  /** Quality scaling: radius factor (1 = 40 m, 11x11 cells) and tuft density factor (1 = 72 per cell). */
+  setScale(radiusK = 1, densityK = 1) {
+    radiusK = Math.min(1, Math.max(0.3, radiusK));
+    densityK = Math.min(1, Math.max(0.3, densityK));
+    this.mats.uniforms.uGrassRadius.value = RADIUS * radiusK;
+    const n = 2 * Math.max(1, Math.round(H * radiusK)) + 1;
+    const ks = Math.max(8, Math.round(K * densityK));
+    if (n === this.N && ks === this.KS && densityK === this.density) return;
+    this.N = n;
+    this.H = (n - 1) / 2;
+    this.KS = ks;
+    this.density = densityK;
+    const old = this.mesh;
+    const mesh = this.makeMesh();
+    mesh.visible = old.visible;
+    const parent = old.parent;
+    if (parent) {
+      parent.add(mesh);
+      parent.remove(old);
+    }
+    old.dispose(); // instance buffers only; the tuft geometry and material are shared
     this.mesh = mesh;
-    mats.uniforms.uGrassRadius.value = RADIUS;
-    this._p = new THREE.Vector3();
+    this.slotKey = new Float64Array(n * n).fill(NaN);
+    this.center[0] = this.center[1] = NaN;
   }
 
   /** Lazily computed tuft data for a cell: Float32Array [x, y, z, rot, sxz, sy, r, g, b] * n. */
@@ -174,14 +210,16 @@ export class GrassPatch {
     const c = this.cell(ix, iz);
     const M = this.mesh.instanceMatrix.array;
     const Cc = this.mesh.instanceColor.array;
-    const base = slot * K;
-    for (let k = 0; k < K; k++) {
+    const KS = this.KS, dens = this.density;
+    const base = slot * KS;
+    for (let k = 0; k < KS; k++) {
       const m = (base + k) * 16;
-      if (k >= c.n) {
+      const src = dens >= 1 ? k : Math.floor(k / dens); // uniform subsample at lower densities
+      if (src >= c.n) {
         for (let j = 0; j < 16; j++) M[m + j] = 0;
         continue;
       }
-      const o = k * 9;
+      const o = src * 9;
       const rot = c.data[o + 3], sxz = c.data[o + 4], sy = c.data[o + 5];
       const cs = Math.cos(rot), sn = Math.sin(rot);
       // column-major: rotation about Y with scale (sxz, sy, sxz)
@@ -225,6 +263,7 @@ export class GrassPatch {
     this.center[0] = cx;
     this.center[1] = cz;
     let dirty = false;
+    const N = this.N, H = this.H;
     for (let dz = -H; dz <= H; dz++) {
       for (let dx = -H; dx <= H; dx++) {
         const ix = cx + dx, iz = cz + dz;

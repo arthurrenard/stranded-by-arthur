@@ -9,10 +9,18 @@
 // update(): wind/translucency uniforms, undergrowth distance culling, the grass patch around the player,
 //   falling trees, sapling growth and ambient drifting leaves (each helper in src/nature/flora/).
 //
+// V4-E LOD: every tree chunk is baked twice, full detail and low detail (species.buildLowLibrary: the same
+//   trees with ≈¼-½ of the triangles), and its single mesh swaps between the two geometries a few times
+//   per second: full when the chunk center is within ctx.quality.lodDistance (default 110 m; 10 m
+//   hysteresis), low beyond (same material, so the wind sway is identical). Only
+//   chunks whose box is within 1.5 x CONFIG.graphics.shadowRange of the camera cast sun shadows; beyond
+//   420 m they don't receive them either. Undergrowth chunks are hidden beyond ctx.quality.underDistance
+//   (160 m) and the grass patch radius/density follow ctx.quality.grassScale / grassDensity.
+//
 // Public API: { trees, boulders, canopyAt(x,z), nearestTree(x,z,maxDist,filter?), treesNear(x,z,r),
 //   carvedTree, debugFell(tree?), group, init(), update(dt) }
 import * as THREE from 'three';
-import { buildLibrary } from './flora/species.js';
+import { buildLibrary, buildLowLibrary } from './flora/species.js';
 import { placeTrees, placeUndergrowth } from './flora/placement.js';
 import { CanopyIndex } from './flora/canopy.js';
 import { ChunkBaker, variantGeometry, hideRange, releaseAfterUpload, CHUNK } from './flora/bake.js';
@@ -21,8 +29,15 @@ import { GrassPatch } from './flora/grass.js';
 import { FallingTrees } from './flora/falling.js';
 import { Saplings } from './flora/growth.js';
 import { placeIsle2Trees, placeIsle2Undergrowth } from './flora/isle2.js';
+import { pickLod, boxDist2D } from '../gfx/quality.js';
 
-const UNDER_VIEW_DIST = 170; // undergrowth chunks are hidden beyond this (m, camera to chunk box)
+const UNDER_VIEW_DIST = 160; // undergrowth chunks are hidden beyond this (m, camera to chunk box; ctx.quality.underDistance)
+const LOD_DIST = 110; // full-detail tree chunks within this (m, camera to chunk center; ctx.quality.lodDistance)
+const LOD_HYST = 10; // m
+const SHADOW_K = 1.5; // tree chunks within shadowRange * SHADOW_K (box distance) cast sun shadows
+const RECEIVE_DIST = 420; // tree chunks beyond this (center) don't receive shadows (outside the shadow box anyway)
+const CULL_EVERY = 0.25; // s between LOD / culling passes (immediately after a camera jump)
+const JUMP2 = 30 * 30;
 const noRaycast = () => {};
 
 export function create(ctx) {
@@ -68,11 +83,13 @@ export function create(ctx) {
   group.name = 'flora';
   let mats = null;
   const underMeshes = []; // { mesh, box }
+  const treeChunks = []; // { mesh, gFull, gLow, cx, cz, box, isFull }
   let carvedMesh = null;
   const subsystems = []; // helpers with update(dt) (grass, falling, growth, ambient)
   let underCount = 0;
   let saplings = null;
   let falling = null;
+  let grass = null;
   try {
     ctx.scene?.add(group);
     mats = createFloraMaterials(ctx);
@@ -81,7 +98,16 @@ export function create(ctx) {
     let tint = tintMain;
 
     // Trees + boulders: merged per chunk, cast + receive shadows, swaying depth material.
+    // A second baker gets the low-detail twin of every instance (same chunk keys).
     const tb = new ChunkBaker();
+    let low = null;
+    try {
+      low = buildLowLibrary(rng.fork('lib'));
+    } catch (e) {
+      console.error('[flora] low-detail trees failed (full detail everywhere)', e);
+    }
+    const tbLo = low ? new ChunkBaker() : null;
+    const lowOf = (key, v, V) => low?.[key]?.[v] ?? V;
     for (const t of trees) {
       if (t.special) continue; // the carved oak is its own mesh (Builder F decorates it)
       tint = t.island === 'isle2' ? tint2 : tintMain;
@@ -94,24 +120,43 @@ export function create(ctx) {
       const bk = 0.88 + tint() * 0.24;
       const bark = [bk, bk, bk];
       meta[t.id].tint = { leaf, bark };
-      meta[t.id].handle = tb.add(meta[t.id].V, { x: t.x, y: t.y, z: t.z, rot: t.rot, s: t.s, phase: t.phase, leafTint: leaf, barkTint: bark });
+      const inst = { x: t.x, y: t.y, z: t.z, rot: t.rot, s: t.s, phase: t.phase, leafTint: leaf, barkTint: bark };
+      meta[t.id].handle = tb.add(meta[t.id].V, inst);
+      if (tbLo) meta[t.id].handleLo = tbLo.add(lowOf(t.vk ?? t.type, t.v, meta[t.id].V), inst);
     }
     for (const o of boulders) {
       tint = o.island === 'isle2' ? tint2 : tintMain;
       const k = 0.9 + tint() * 0.2;
-      tb.add(lib.boulder[o.v], { x: o.x, y: o.y, z: o.z, rot: o.rot, s: o.s, phase: 0, windK: 0, barkTint: [k, k, k], leafTint: [k, k, k] });
+      const inst = { x: o.x, y: o.y, z: o.z, rot: o.rot, s: o.s, phase: 0, windK: 0, barkTint: [k, k, k], leafTint: [k, k, k] };
+      tb.add(lib.boulder[o.v], inst);
+      tbLo?.add(lowOf('boulder', o.v, lib.boulder[o.v]), inst);
     }
-    for (const c of tb.build()) {
+    const treeMesh = (c, name) => {
       const m = new THREE.Mesh(c.geometry, mats.tree);
-      m.name = `flora-trees-${c.ix},${c.iz}`;
+      m.name = name;
       m.castShadow = true;
       m.receiveShadow = true;
-      m.customDepthMaterial = mats.depth;
+      m.customDepthMaterial = mats.depth; // same wind sway in the shadow pass
       m.matrixAutoUpdate = false;
       m.updateMatrix();
       m.raycast = noRaycast; // CPU arrays are released after upload
       releaseAfterUpload(c.geometry, true); // keep the index: falling trees collapse their range
       group.add(m);
+      return m;
+    };
+    const byKey = new Map();
+    for (const c of tb.build()) {
+      const tc = { mesh: treeMesh(c, `flora-trees-${c.ix},${c.iz}`), gFull: c.geometry, gLow: null, cx: (c.ix + 0.5) * CHUNK, cz: (c.iz + 0.5) * CHUNK, box: c.geometry.boundingBox, isFull: true };
+      byKey.set(c.key, tc);
+      treeChunks.push(tc);
+    }
+    if (tbLo) {
+      for (const c of tbLo.build()) {
+        const tc = byKey.get(c.key);
+        if (!tc) continue;
+        tc.gLow = c.geometry;
+        releaseAfterUpload(c.geometry, true); // uploaded the first time the chunk shows its low detail
+      }
     }
 
     // Undergrowth: ferns, bushes, flowers (bloom attribute), reeds, lily pads, rocks.
@@ -161,7 +206,7 @@ export function create(ctx) {
     }
 
     // Dense grass patch that follows the player.
-    const grass = new GrassPatch(ctx, mats);
+    grass = new GrassPatch(ctx, mats);
     group.add(grass.mesh);
     subsystems.push(grass);
 
@@ -192,17 +237,47 @@ export function create(ctx) {
     m.collider = null;
     canopy.remove(t);
     if (m.handle) hideRange(m.handle);
+    if (m.handleLo) hideRange(m.handleLo);
     t.alive = false;
     t.standing = false;
   }
 
   // ── Per-frame state ──────────────────────────────────────────────────
   const camPos = new THREE.Vector3();
+  const lastCull = new THREE.Vector3(NaN, 0, NaN);
   let cullTimer = 0;
+  let grassK = 1, grassD = 1;
+  // The first frames render the full-detail chunks once, so their geometry is uploaded and the CPU copies
+  // are released (releaseAfterUpload) instead of sitting in the JS heap until the player walks near.
+  let lodWarmup = 2;
+
+  /** Tree chunk LOD + shadow flags (camPos is current). */
+  function updateTreeChunks() {
+    const Q = ctx.quality;
+    const D = Q?.lodDistance ?? LOD_DIST;
+    const castR = (ctx.config?.graphics?.shadowRange ?? 70) * SHADOW_K;
+    const x = camPos.x, z = camPos.z;
+    for (let i = 0; i < treeChunks.length; i++) {
+      const tc = treeChunks[i];
+      const dx = tc.cx - x, dz = tc.cz - z;
+      const d = Math.sqrt(dx * dx + dz * dz);
+      if (tc.gLow) {
+        const full = pickLod(tc.isFull, d, D, LOD_HYST);
+        if (full !== tc.isFull) {
+          tc.isFull = full;
+          tc.mesh.geometry = full ? tc.gFull : tc.gLow;
+        }
+      }
+      const b = tc.box;
+      const m = tc.mesh;
+      m.castShadow = boxDist2D(b.min.x, b.min.z, b.max.x, b.max.z, x, z) < castR;
+      m.receiveShadow = d < RECEIVE_DIST;
+    }
+  }
 
   function cullUndergrowth() {
-    ctx.camera.getWorldPosition(camPos);
-    const R2 = UNDER_VIEW_DIST * UNDER_VIEW_DIST;
+    const R = ctx.quality?.underDistance ?? UNDER_VIEW_DIST;
+    const R2 = R * R;
     for (const u of underMeshes) {
       const b = u.box;
       const dx = Math.max(b.min.x - camPos.x, 0, camPos.x - b.max.x);
@@ -243,8 +318,18 @@ export function create(ctx) {
     get fallen() {
       return falling ? falling.active.map((f) => ({ tree: f.t, phase: f.phase, gathered: f.gathered })) : [];
     },
-    /** Internal (helpers): per-tree meta, retire a tree, materials, chunk size. */
-    _internal: { meta, retireTree, canopy, get mats() { return mats; }, CHUNK },
+    /** Internal (helpers): per-tree meta, retire a tree, materials, chunk size, tree chunk LOD state. */
+    _internal: { meta, retireTree, canopy, get mats() { return mats; }, CHUNK, treeChunks },
+    /** Debug: tree chunk LOD counts { full, low, casting }. */
+    lodStats() {
+      let full = 0, lowN = 0, casting = 0;
+      for (const tc of treeChunks) {
+        if (tc.isFull || !tc.gLow) full++;
+        else lowN++;
+        if (tc.mesh.castShadow) casting++;
+      }
+      return { full, low: lowN, casting };
+    },
     get undergrowthCount() {
       return underCount;
     },
@@ -254,9 +339,25 @@ export function create(ctx) {
     update(dt) {
       mats?.update();
       cullTimer -= dt;
-      if (cullTimer <= 0 && underMeshes.length) {
-        cullTimer = 0.25;
-        cullUndergrowth();
+      if (ctx.camera && (treeChunks.length || underMeshes.length)) {
+        ctx.camera.getWorldPosition(camPos);
+        if (cullTimer <= 0 || !(camPos.distanceToSquared(lastCull) < JUMP2)) {
+          cullTimer = CULL_EVERY;
+          lastCull.copy(camPos);
+          if (lodWarmup > 0) {
+            lodWarmup--;
+            cullTimer = 0;
+          } else updateTreeChunks();
+          cullUndergrowth();
+        }
+      }
+      if (grass) {
+        const k = ctx.quality?.grassScale ?? 1, gd = ctx.quality?.grassDensity ?? 1;
+        if (k !== grassK || gd !== grassD) {
+          grassK = k;
+          grassD = gd;
+          grass.setScale(k, gd);
+        }
       }
       for (const s of subsystems) s.update(dt);
     },
