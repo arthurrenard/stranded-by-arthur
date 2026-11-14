@@ -82,4 +82,7 @@ a Bella message-in-a-bottle easter egg.
   (was 231 / 2.67 M); golden hour/night reviewed. Was: Wave 2 (2 agents): D aesthetics (colors/materials/lighting/post FX/HUD skin/avatar look), E optimization (tree LOD, shadow
   casters, grass, quality presets + adaptive resolution in NEW src/gfx/quality.js → orchestrator wires it in main.js)
 - [x] Integrate + playtest DONE; pushed + Pages deploy verified live (2026-11-21, bundle index-BmQPCHYp.js).
+  LIVE-SITE CHECKS (2026-11-22): survey button at the circle (+ during the aurora), runes solved by hand → causeway, 3 clues → journal,
+  palm-shake knock-out (4 h, 10 hp, needs floored, fatigue), fish cooking (raw → grilled), 1280×720 overlap probe clean, server
+  runs from the exact Dockerfile file set (binds 0.0.0.0, /health ok). Title backdrop now uses the new palette (user may prefer the old one).
   NEXT (optional): deploy server/ to Fly.io (docs/MULTIPLAYER.md) and set CONFIG.net.defaultServer; real two-machine test.
