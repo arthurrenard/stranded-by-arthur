@@ -123,7 +123,8 @@ test('validateEvent: only shared events, object payloads under 4 KB', () => {
 
 test('validateHello: sanitized fields', () => {
   const h = validateHello({ name: '<Zoé>', room: 'abcdef', seed: 42, difficulty: 'hard', timeHours: 12.5, v: 1 });
-  assert.deepEqual(h, { name: 'Zoé', room: 'ABCDEF', seed: 42, difficulty: 'hard', timeHours: 12.5, v: 1 });
+  assert.deepEqual(h, { name: 'Zoé', room: 'ABCDEF', seed: 42, difficulty: 'hard', timeHours: 12.5, resume: false, v: 1 });
+  assert.equal(validateHello({ name: 'a', resume: true }).resume, true, 'resume flag passes through');
   const e = validateHello({});
   assert.equal(e.name, 'Castaway');
   assert.equal(e.room, null);

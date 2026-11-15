@@ -313,6 +313,7 @@ export function create(ctx) {
       send(MSG.HELLO, {
         name: want.name,
         room: want.room || undefined,
+        resume: !!want.resume, // we were in this room before: ask the server to re-create it if it restarted
         seed: CONFIG.seed,
         difficulty: ctx.difficulty?.id,
         timeHours: ctx.time?.hoursTotal,
@@ -488,7 +489,10 @@ export function create(ctx) {
     api.mode = api.isHost ? 'host' : 'client';
     attempts = 0;
     syncSkipGuard();
-    if (want) want.room = m.room; // reconnects rejoin by code
+    if (want) {
+      want.room = m.room; // reconnects rejoin by code
+      want.resume = true; // ...and bring the room back if the server restarted in between
+    }
     for (const p of m.players || []) addPlayer(p.id, p.name);
     refreshPanel();
     updateUrl(m.room);

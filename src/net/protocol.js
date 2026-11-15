@@ -188,6 +188,8 @@ export function validateHello(o) {
     seed: num(o.seed) ? o.seed : null,
     difficulty: typeof o.difficulty === 'string' ? cleanText(o.difficulty, 16) || null : null,
     timeHours: num(o.timeHours, 0, 1e6) ? o.timeHours : null,
+    // a reconnect to a room this client was already in: if the server restarted and lost it, re-create it under the same code
+    resume: o.resume === true,
     v,
   };
 }

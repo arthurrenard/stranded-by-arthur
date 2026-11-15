@@ -65,10 +65,9 @@ export async function startServer({ port = Number(process.env.PORT) || 8787, hos
     const raw = encode(type, fields);
     for (const p of room.players.values()) if (p !== except && p.ws.readyState === OPEN) p.ws.send(raw);
   }
-  function makeRoom() {
-    let code;
-    do code = makeRoomCode();
-    while (rooms.has(code));
+  function makeRoom(wanted = null) {
+    let code = wanted && !rooms.has(wanted) ? wanted : null;
+    while (!code || rooms.has(code)) code = makeRoomCode();
     const room = { code, players: new Map(), hostId: null, seed: null, difficulty: null, timeHours: null, timeAt: 0, dirty: false };
     rooms.set(code, room);
     return room;
@@ -91,6 +90,11 @@ export async function startServer({ port = Number(process.env.PORT) || 8787, hos
     let room;
     if (h.room) {
       room = rooms.get(h.room);
+      // the server restarted (deploy, maintenance) and lost its in-memory rooms: a returning player brings the room back
+      if (!room && h.resume) {
+        room = makeRoom(h.room);
+        log(`[net] ${h.name} resumed ${h.room} after a restart`);
+      }
       if (!room) return send(c, MSG.ERROR, { code: ERRORS.NO_ROOM, message: `No session ${h.room}.` });
       if (room.players.size >= MAX_PLAYERS) return send(c, MSG.ERROR, { code: ERRORS.ROOM_FULL, message: `Session ${h.room} is full.` });
     } else room = makeRoom();

@@ -142,6 +142,12 @@ a VPS behind Caddy or nginx, or a Raspberry Pi with a tunnel. Pages served over 
 - **Message caps.** 16 KB per message, 4 KB per event payload. 30 state updates and 30 events per second are accepted
   per player. Positions beyond ±5000 m are rejected.
 
+## 6b. Restarts and the Fly trial
+The relay keeps rooms in memory, so a server restart (a deploy, Fly maintenance, or the **Fly trial, which stops machines after
+5 minutes until a card is added at https://fly.io/trial**) drops everyone. Clients reconnect automatically and send `resume`, so
+the server re-creates the room under the same code: you see "Connection lost. Reconnecting…" for a few seconds, then play on.
+With a card on file the 5-minute cutoff goes away (invoices under $5 are waived, and this server costs about $2/month).
+
 ## 7. Cost
 
 Checked on 2026-11-21. Prices change, so confirm on the pricing pages before you rely on them.
