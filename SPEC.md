@@ -514,3 +514,32 @@ animation, a canvas name tag that fades beyond 120 m, interpolated `CONFIG.net.i
 `ws` server (no DB): rooms by 6-letter code, host = first player, ≤ maxPlayers, relays state/events, 20 Hz snapshots, drops idle
 sockets, `PORT` env, a `Dockerfile` + `fly.toml`, and `docs/MULTIPLAYER.md` (how to run locally with two tabs, how to deploy on Fly.io
 / Railway, costs). The URL params `?server=&room=&name=` auto-join after the title screen.
+
+---
+## 13. Update v5 (2026-11-22): drop items, backpack ↔ hotbar, co-op raft + communal boat
+| builder | files |
+|---|---|
+| V5-A inventory | src/gameplay/inventory.js, src/ui/hud.js, hud-panels.js, hud-data.js, hud.css, src/nature/resources.js (drops only), tests/inventory-ui.test.mjs |
+| V5-B co-op | src/gameplay/raft.js + raft-logic.js, src/gameplay/vehicles.js + vehicle-*.js, src/net/net.js, src/net/protocol.js, server/index.js (+ tests), tests/coop.test.mjs |
+
+**Inventory (A).** Slots model: the backpack is an ordered grid of slots (e.g. 24) + a 9-slot hotbar; each slot holds {id, n}
+(stack limit per item, e.g. 20; tools 1). The inventory/crafting panel shows the backpack grid and the hotbar row: drag & drop
+between any two slots (swap or merge stacks; Shift-drag splits half), and right-click / a "Drop" button drops the stack (Shift: one).
+Q drops the selected hotbar stack (Shift+Q one item). The existing API (add/remove/count/has/list/selected/select) keeps working
+(add fills existing stacks then the hotbar's empty slots then the backpack). Dropped items become world pickups via
+`ctx.resources.spawnDrop(id, n, x, z, dropId?)` (a small bundle mesh on the ground in front of the player, `[E] Pick up <n> <item>`),
+emitting `item:dropped` {dropId, id, n, x, z} and, when someone picks it up, `drop:picked` {dropId}. `ctx.resources.removeDrop(dropId)`
+removes a pickup without giving the item (used for remote pickups). dropIds are `<playerId|local>:<counter>`.
+
+**Co-op (B).** New relayed events (add to SHARED_EVENTS on client AND server; apply remotely with the existing loop guard):
+- `item:dropped` → remote `spawnDrop(...)` with the same dropId; `drop:picked` → remote `removeDrop(dropId)`.
+- **Communal boat stockpile:** the Boatyard gets `[R] Deposit materials`: moves every item the current stage (and later stages) needs
+  from the player's inventory into a shared `ctx.raft.stock` {id: n}; stage builds consume from stock first, then the builder's own
+  inventory. `raft:deposit` {id, n, by} syncs the stock; `raft:stage` already syncs progress (stock consumption is applied with it). The
+  objective tracker / Boat tab show "stock + yours / needed". The host is authoritative: a joiner receives the host's stock + stage in a
+  `raft:sync` {stageIndex, stock} sent by the host when a player joins.
+- **Shared raft, 2 seats:** the paddle raft placement (`vehicle:placed` {vid, type, x, z, heading}) and its pose (driver → `vehicle:pose`
+  {vid, x, z, heading, roll} at ~10 Hz) are relayed, so everyone sees the same raft. `[E] Board the raft` takes the free seat: seat 0 =
+  paddler (drives), seat 1 = passenger (rides along, free look, can fish). `vehicle:seat` {vid, seat, playerId|null} syncs occupancy;
+  a full raft says "The raft is full". Only the seat-0 player simulates and broadcasts the raft; others interpolate it. Capsizing (driver
+  side) throws both off. Remote avatars show the sitting/paddle pose at their seat.

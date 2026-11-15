@@ -87,3 +87,10 @@ a Bella message-in-a-bottle easter egg.
   runs from the exact Dockerfile file set (binds 0.0.0.0, /health ok). Title backdrop now uses the new palette (user may prefer the old one).
   SERVER DEPLOYED (2026-11-22): Fly app stranded-by-arthur-relay (org personal / Arthur Renard, sjc), wss://stranded-by-arthur-relay.fly.dev,
   set as CONFIG.net.defaultServer. (old note: NEXT (optional): deploy server/ to Fly.io (docs/MULTIPLAYER.md) and set CONFIG.net.defaultServer; real two-machine test.
+
+## v5 update (2026-11-22): requested by the user
+Requests: drop items; move items between backpack and hotbar; two people on one raft; build the boat together from communal items.
+Also done before this: title screen solo/create/join; Fly server deployed; lobbies survive server restarts (resume); the user added a
+card to Fly (5-min trial cutoff should be gone: verifying with a 6.7-min connection test).
+- [x] SPEC §13 contract + ownership
+- [ ] V5 builders (2 agents): A inventory UI, B co-op sync. Then a two-tab test, a server redeploy (SHARED_EVENTS changed), push.
