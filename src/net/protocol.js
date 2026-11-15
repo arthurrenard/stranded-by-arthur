@@ -58,9 +58,21 @@ export const SHARED_EVENTS = Object.freeze([
   'rescue:success',
   'raft:sailed',
   'time:set',
+  // v5 (SPEC §13): co-op
+  'item:dropped',
+  'drop:picked',
+  'raft:deposit',
+  'raft:sync',
+  'vehicle:placed',
+  'vehicle:pose',
+  'vehicle:seat',
 ]);
 /** Only the room host may send these. */
-export const HOST_ONLY_EVENTS = Object.freeze(['time:set']);
+export const HOST_ONLY_EVENTS = Object.freeze(['time:set', 'raft:sync']);
+/** v5: sent even while the sender is paused (join-time sync / re-announces); the rest only while playing. */
+export const PAUSED_OK_EVENTS = Object.freeze(['raft:sync', 'vehicle:placed', 'vehicle:seat', 'raft:deposit', 'item:dropped', 'drop:picked']);
+/** v5: vehicle types that may be shared. */
+export const SHARED_VEHICLES = Object.freeze(['paddle_raft']);
 
 export const ERRORS = Object.freeze({
   NO_ROOM: 'no_room', // join: unknown code
@@ -175,7 +187,48 @@ export function validateEvent(o) {
     return null;
   }
   if (size > LIMITS.eventBytes) return null;
+  if (!checkPayload(o.name, payload)) return null;
   return { name: o.name, payload };
+}
+
+// v5: per-event field checks. A field that is present must have the right type and range (missing fields are
+// allowed: receivers ignore incomplete payloads), so a client can't push garbage into everyone else's world.
+const H = LIMITS.worldHalf;
+const isStr = (v, max) => typeof v === 'string' && v.length > 0 && v.length <= max;
+const isInt = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
+const opt = (v, ok) => v === undefined || ok(v);
+const coord = (v) => num(v, -H, H);
+const angle = (v) => num(v, -100, 100);
+/** { itemId: count } with at most 64 keys, ids ≤ 32 chars, counts 0..9999. */
+export function isStockMap(o) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return false;
+  let k = 0;
+  for (const id in o) {
+    if (++k > 64 || id.length > 32 || !isInt(o[id], 0, 9999)) return false;
+  }
+  return true;
+}
+function checkPayload(name, p) {
+  switch (name) {
+    case 'item:dropped':
+      return opt(p.dropId, (v) => isStr(v, 48)) && opt(p.id, (v) => isStr(v, 32)) && opt(p.n, (v) => isInt(v, 1, 999)) && opt(p.x, coord) && opt(p.z, coord);
+    case 'drop:picked':
+      return opt(p.dropId, (v) => isStr(v, 48));
+    case 'raft:stage':
+      return opt(p.stageIndex, (v) => isInt(v, 0, 64)) && opt(p.used, isStockMap);
+    case 'raft:deposit':
+      return opt(p.id, (v) => isStr(v, 32)) && opt(p.n, (v) => isInt(v, 1, 9999)) && opt(p.by, (v) => typeof v === 'string' && v.length <= LIMITS.nameChars);
+    case 'raft:sync':
+      return opt(p.stageIndex, (v) => isInt(v, 0, 64)) && opt(p.stock, isStockMap);
+    case 'vehicle:placed':
+      return opt(p.vid, (v) => isStr(v, 48)) && opt(p.type, (v) => SHARED_VEHICLES.includes(v)) && opt(p.x, coord) && opt(p.z, coord) && opt(p.heading, angle);
+    case 'vehicle:pose':
+      return opt(p.vid, (v) => isStr(v, 48)) && opt(p.x, coord) && opt(p.z, coord) && opt(p.heading, angle) && opt(p.roll, (v) => num(v, -10, 10)) && opt(p.cap, (v) => v === 0 || v === 1);
+    case 'vehicle:seat':
+      return opt(p.vid, (v) => isStr(v, 48)) && opt(p.seat, (v) => v === 0 || v === 1) && opt(p.playerId, (v) => v === null || isStr(v, 32));
+    default:
+      return true;
+  }
 }
 
 /** Normalize a `hello`. Returns { name, room|null, seed|null, difficulty|null, timeHours|null, v } or null. */

@@ -23,6 +23,8 @@
 //   shifts): sticks, stones, flint, pyrite, leafy shrubs, wild banana plants by the Rain Pool (bunches regrow ~1 day),
 //   aloe + yarrow, cattails at the Rain Pool, driftwood + coconuts in the cove. spawnItem(id, x, z, n, { keep, onPick })
 //   (keep: never evicted by the 80-drop cap; onPick(n) after each pickup).
+// v5 (V5-A, SPEC §13): spawnDrop(id, n, x, z, dropId?) / removeDrop(dropId): player-dropped stacks as shared
+//   pickups (item:dropped / drop:picked events, relayed by net).
 import * as THREE from 'three';
 import { ITEMS } from '../core/items.js';
 import { clamp01, smoothstep, lerp } from '../core/util.js';
@@ -110,6 +112,9 @@ const GEOS = {
   leafPile: M.leafPileGeometry,
 };
 
+/** v5: player drops that the 80-drop cap never evicts (besides boat parts). */
+const KEEP_DROPS = new Set(['shovel', 'pickaxe', 'paddle', 'fishing_rod', 'diving_mask', 'boat_key', 'compass']);
+
 /** Which mesh a dropped item (spawnItem) uses. */
 const DROP_LOOK = {
   wood: ['stick', 'solid'],
@@ -141,6 +146,8 @@ export function create(ctx) {
   const touched = new Set(); // meshes whose instance buffers need upload this frame
   const drops = [];
   const pendingDrops = [];
+  const dropsById = new Map(); // v5: dropId -> drop (player-dropped, shared pickups)
+  let dropCounter = 0;
   const group = new THREE_.Group();
   group.name = 'resources';
   let mats = null;
@@ -590,12 +597,13 @@ export function create(ctx) {
     mesh.receiveShadow = true;
     mesh.name = 'res-drop-' + id;
     group.add(mesh);
-    const drop = { id, n, mesh, floating, x, z, y, t: rand() * 10, handle: null, removed: false, keep: !!opts?.keep, onPick: opts?.onPick || null };
-    drop.remove = () => removeDrop(drop);
+    const drop = { id, n, mesh, floating, x, z, y, t: rand() * 10, handle: null, removed: false, keep: !!opts?.keep, onPick: opts?.onPick || null, dropId: opts?.dropId || null };
+    drop.remove = () => destroyDrop(drop);
+    if (drop.dropId) dropsById.set(drop.dropId, drop);
     if (ctx.interact?.register) {
       drop.handle = ctx.interact.register({
         position: { x, y: y + 0.15, z },
-        label: () => `Pick up ${itemName(drop.id)}${drop.n > 1 ? ' ×' + drop.n : ''}`,
+        label: () => (drop.dropId ? `Pick up ${drop.n > 1 ? drop.n + ' ' : ''}${itemName(drop.id)}` : `Pick up ${itemName(drop.id)}${drop.n > 1 ? ' ×' + drop.n : ''}`),
         onUse: () => pickDrop(drop),
         priority: 0.3,
         data: drop,
@@ -604,20 +612,59 @@ export function create(ctx) {
     drops.push(drop);
     if (drops.length > 80) {
       const old = drops.find((d) => !d.keep); // kept drops (the hut's key, compass…) are never evicted
-      if (old) removeDrop(old);
+      if (old) {
+        // a shared (player-dropped) pickup evicted here is gone for everyone, so the others stay in sync
+        if (old.dropId) ctx.events?.emit?.('drop:picked', { dropId: old.dropId });
+        destroyDrop(old);
+      }
     }
     return drop;
   }
-  function removeDrop(drop) {
+  function destroyDrop(drop) {
     if (drop.removed) return;
     drop.removed = true;
     drop.handle?.remove?.();
     group.remove(drop.mesh);
     const i = drops.indexOf(drop);
     if (i >= 0) drops.splice(i, 1);
+    if (drop.dropId && dropsById.get(drop.dropId) === drop) dropsById.delete(drop.dropId);
+  }
+  /**
+   * v5 (SPEC §13): a player-dropped stack as a world pickup ~ on the ground at (x, z) (floats on water).
+   * dropId '<playerId|local>:<counter>'; a locally generated one emits item:dropped {dropId, id, n, x, z}
+   * (a remote apply passes the sender's dropId and emits nothing).
+   */
+  function spawnDrop(id, n, x, z, dropId) {
+    if (!ITEMS[id] || !Number.isFinite(x) || !Number.isFinite(z)) return null;
+    n = Math.max(1, Math.floor(n) || 1);
+    const local = !dropId;
+    if (local) dropId = `${(ctx.net?.connected && ctx.net?.id) || 'local'}:${++dropCounter}`;
+    else if (dropsById.has(dropId)) return dropsById.get(dropId);
+    // boat parts and one-of tools are never evicted by the 80-drop cap (the goal must stay finishable)
+    const keep = ITEMS[id].category === 'part' || KEEP_DROPS.has(id);
+    const d = spawnItem(id, x, z, n, { dropId, keep });
+    if (local) ctx.events?.emit?.('item:dropped', { dropId, id, n, x, z });
+    return d;
+  }
+  /** v5: remove a dropped pickup without giving the item (someone else picked it up). */
+  function removeDrop(dropOrId) {
+    if (!dropOrId) return false;
+    if (typeof dropOrId === 'object') {
+      destroyDrop(dropOrId);
+      return true;
+    }
+    const d = dropsById.get(dropOrId);
+    if (d) {
+      destroyDrop(d);
+      return true;
+    }
+    // not built yet: forget a pending one
+    const k = pendingDrops.findIndex((p) => p[4]?.dropId === dropOrId);
+    if (k >= 0) pendingDrops.splice(k, 1);
+    return k >= 0;
   }
   function pickDrop(drop) {
-    const r = ctx.inventory?.add?.(drop.id, drop.n);
+    const r = ctx.inventory?.add?.(drop.id, drop.n, { spill: false });
     const added = typeof r === 'number' ? r : drop.n;
     if (added <= 0) {
       ctx.ui?.toast?.(`No room for more ${itemName(drop.id)}`, { icon: ITEMS[drop.id]?.icon, kind: 'warn', duration: 2.5 });
@@ -633,7 +680,15 @@ export function create(ctx) {
     } catch (e) {
       console.error('[resources] onPick', e);
     }
-    if (drop.n <= 0) removeDrop(drop);
+    if (drop.n <= 0) {
+      if (drop.dropId) ctx.events?.emit?.('drop:picked', { dropId: drop.dropId });
+      destroyDrop(drop);
+    } else if (drop.dropId) {
+      // partial pickup of a shared drop (pack full): re-issue the rest under a new dropId so others stay in sync
+      ctx.events?.emit?.('drop:picked', { dropId: drop.dropId });
+      destroyDrop(drop);
+      spawnDrop(drop.id, drop.n, drop.x, drop.z);
+    }
   }
   function updateDrops(dt) {
     for (const d of drops) {
@@ -1098,6 +1153,8 @@ export function create(ctx) {
 
   return {
     spawnItem,
+    spawnDrop,
+    removeDrop,
     nearest,
     counts,
     regrowAll,

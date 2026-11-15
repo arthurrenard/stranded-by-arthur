@@ -41,6 +41,10 @@ Open **http://localhost:5173** and click **Click to begin**. Headphones recommen
   friend's code). From a solo game you can still open a lobby later: Pause → Multiplayer. Players see each other,
   share gathered resources, fires, structures, the boat and the clock; Enter chats, P lists players. Solo play is unchanged.
   Hosting your own server costs a few dollars a month: see [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md).
+- **Backpack + hotbar.** Tab opens a 24-slot backpack: drag items between backpack and hotbar (Shift splits a stack), right-click
+  or drag out of the panel to drop. In game, **Q** drops the selected item (Shift+Q drops one).
+- **Co-op.** Dropped items appear for everyone. The paddle raft has two seats (one paddles, one rides along and can fish), and the
+  Boatyard has a shared stockpile: **[R] Deposit materials**, and everyone's deposits count toward building the boat together.
 - **Graphics setting** (Pause → Graphics: Low / Medium / High) and automatic resolution scaling; distant trees use low-detail models.
 - Coconuts are less filling; a falling coconut now usually knocks you out for 4 hours instead of killing you (35 % it still does).
 - The intro crash keeps the boat in one piece, the wind is smoother, alerts never overlap, and the in-game look is warmer and less saturated.

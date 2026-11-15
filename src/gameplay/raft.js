@@ -7,6 +7,11 @@
 // Events out: raft:part {id, where}, raft:stage {stageIndex, stage}, raft:complete {plan}, raft:sailed {plan, name, day}
 // Events in:  game:start (resolve the plan from ctx.difficulty, spawn everything), difficulty:set, item:added/removed,
 //             input:unlock (skips the launch cinematic).
+// v5 (V5-B, SPEC §13): the communal stockpile ctx.raft.stock {id: n}. Online, the Boatyard's [R] is "Deposit materials"
+// (everything the remaining stages need moves from your inventory into the stock: raft:deposit {id, n, by} per item);
+// stage builds take from the stock first, then the builder's inventory (raft:stage carries `used` = taken from stock).
+// The host answers net:playerJoined with raft:sync {stageIndex, stock}. objective().needs[i] = {id, have (stock + yours),
+// need, stock}. Offline nothing changes (the stock stays empty, [R] is still "Check the plan").
 // Flags:      ctx.flags.cinematic during the build fade (restored) and the launch (kept: the game is over).
 // v3 (V3-C): 'isle2hut' parts (CONFIG.raft.parts.*.where) are not scattered here: they wait in Tempest Isle's fishing
 // hut (ctx.isle2 gives them) and parts() lists them with where 'isle2hut' (found = taken). The finished boat can also
@@ -42,6 +47,9 @@ export function create(ctx) {
 
   let started = false, planId = null, plan = null;
   let stageIndex = 0, complete = false, sailed = false, busy = false;
+  const stock = {}; // v5: communal stockpile (shared in co-op)
+  const total = (id) => count(id) + (stock[id] || 0);
+  const online = () => !!ctx.net?.connected;
   const site = new THREE.Vector3();
   let siteInfo = null;
   let root = null, mats = null, boat = null, puffs = null, wake = null;
@@ -106,9 +114,9 @@ export function create(ctx) {
       obj.hint = sailed ? '' : `The ${p.name} is ready: launch it from the Boatyard (05:00–20:00)`;
       return obj;
     }
-    L.needsStatus(st, count, status);
+    L.stockNeedsStatus(st, stock, count, status);
     obj.stageLabel = st.label;
-    obj.needs = status.map((s) => ({ id: s.id, have: s.have, need: s.need }));
+    obj.needs = status.map((s) => ({ id: s.id, have: s.have, need: s.need, stock: s.stock }));
     obj.ready = L.isReady(status);
     const miss = status.find((s) => s.have < s.need);
     obj.hint = miss ? L.hintFor(miss.id, hintInfo(miss.id)) : `Everything is ready: build “${st.label}” at the Boatyard`;
@@ -178,8 +186,8 @@ export function create(ctx) {
       onUse: yardUse,
       enabled: () => started && !busy && !cine && !sailed && !voyage.active,
       secondary: {
-        label: () => (voyage.away ? '' : complete ? 'Sail to Tempest Isle' : 'Check the plan'),
-        onUse: () => (voyage.away ? null : complete ? voyage.sailToIsle() : showPlan()),
+        label: () => (voyage.away ? '' : complete ? 'Sail to Tempest Isle' : online() ? 'Deposit materials' : 'Check the plan'),
+        onUse: () => (voyage.away ? null : complete ? voyage.sailToIsle() : online() ? deposit() : showPlan()),
       },
     });
     const h1 = ctx.interact?.register?.({ ...def(), position: new THREE.Vector3(site.x, site.y + 1.0, site.z), radius: 5, priority: 0.4 });
@@ -449,7 +457,7 @@ export function create(ctx) {
   function showNeeds() {
     const st = plan.stages[stageIndex];
     if (!st) return;
-    L.needsStatus(st, count, status);
+    L.stockNeedsStatus(st, stock, count, status);
     const miss = L.missingText(status, (id) => `${iconOf(id)} ${nameOf(id)}`);
     const m = status.find((s) => s.have < s.need);
     dirty = true;
@@ -494,7 +502,9 @@ export function create(ctx) {
       toast(`You’re too hungry to work for ${L.fmtHours(st.hours)}. Eat something first.`, { icon: '🍎', kind: 'warn', key: 'raft-need' });
       return;
     }
-    if (!L.consumeStage(st, count, (id, n) => ctx.inventory?.remove?.(id, n))) return showNeeds();
+    const used = L.consumeStageStock(st, stock, count, (id, n) => ctx.inventory?.remove?.(id, n));
+    if (!used) return showNeeds();
+    dirty = true;
     busy = true;
     const prevCine = ctx.flags.cinematic;
     ctx.flags.cinematic = true;
@@ -520,8 +530,52 @@ export function create(ctx) {
     play('place', { position: site });
     const next = plan.stages[stageIndex];
     toast(`${st.label}: done (${stageIndex}/${plan.stages.length}).${next ? ' Next: ' + next.label + '.' : ''}`, { icon: '🔨', kind: 'good', duration: 5 });
-    ev.emit('raft:stage', { stageIndex, stage: st });
+    ev.emit('raft:stage', { stageIndex, stage: st, used });
     if (complete) onComplete();
+  }
+
+  /** v5: [R] Deposit materials (online): move what the remaining stages still need into the communal stock. */
+  function deposit() {
+    if (!started || busy || complete) return 0;
+    const list = L.depositList(plan, stageIndex, stock, count);
+    if (!list.length) {
+      toast('Nothing to deposit: you carry nothing the boat still needs (or the stockpile already has it).', { icon: '📦', kind: 'info', key: 'raft-deposit' });
+      return 0;
+    }
+    const by = ctx.net?.name || '';
+    const parts = [];
+    let moved = 0;
+    for (const { id, n } of list) {
+      if (ctx.inventory?.remove?.(id, n) === false) continue;
+      L.addStock(stock, id, n);
+      moved += n;
+      parts.push(`${n} ${iconOf(id)} ${nameOf(id)}`);
+      ev.emit('raft:deposit', { id, n, by });
+    }
+    dirty = true;
+    if (moved) {
+      play('place', { position: site, volume: 0.6 });
+      toast(`Added to the boat stockpile: ${parts.join(', ')}.`, { icon: '📦', kind: 'good', key: 'raft-deposit' });
+    }
+    return moved;
+  }
+  /** v5 (net): a remote deposit. */
+  function applyDeposit(id, n) {
+    if (typeof id !== 'string' || !(n > 0)) return false;
+    L.addStock(stock, id, Math.floor(n));
+    dirty = true;
+    return true;
+  }
+  /** v5 (net): the host's raft:sync (authoritative stock; the stage never goes backwards). */
+  function applySync(index, src) {
+    if (src && typeof src === 'object') L.setStock(stock, src);
+    dirty = true;
+    if (typeof index === 'number') applyStage(index);
+    return true;
+  }
+  function onPlayerJoined() {
+    if (!ctx.net?.isHost || !started) return;
+    ev.emit('raft:sync', { stageIndex, stock: { ...stock } });
   }
 
   function onComplete() {
@@ -693,9 +747,13 @@ export function create(ctx) {
     startCine();
   }
   /** v4 (net): a remote player finished stages: jump to `index` completed stages (never backwards). */
-  function applyStage(index) {
+  function applyStage(index, used) {
     if (!started) start();
     if (!plan) return false;
+    if (used) {
+      L.applyUsed(stock, used); // the remote builder took these from the shared stock
+      dirty = true;
+    }
     const n = Math.max(0, Math.min(plan.stages.length, Math.floor(Number(index) || 0)));
     if (n <= stageIndex) return false;
     stageIndex = n;
@@ -740,8 +798,13 @@ export function create(ctx) {
     debugGiveAll,
     debugComplete,
     debugLaunch,
-    /** v4 (net): remote raft:stage → jump to `index` completed stages. */
+    /** v4 (net): remote raft:stage → jump to `index` completed stages (v5: `used` is taken from the stock). */
     applyStage,
+    /** v5: the communal stockpile { id: n } (read-only for callers). */
+    stock,
+    deposit,
+    applyDeposit,
+    applySync,
     init() {
       try {
         siteInfo = findSite(ctx.world);
@@ -756,6 +819,7 @@ export function create(ctx) {
       ev.on('item:added', markDirty);
       ev.on('item:removed', markDirty);
       ev.on('raft:part', onPart);
+      ev.on('net:playerJoined', onPlayerJoined);
       voyage.init();
       ev.on('input:unlock', () => {
         if (cine && cine.t > 0.3) beginFade(0.8);

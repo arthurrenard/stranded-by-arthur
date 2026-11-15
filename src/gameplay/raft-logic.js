@@ -159,3 +159,74 @@ export function missingText(status, nameFn = (id) => id) {
     .map((s) => `${nameFn(s.id)} ${s.have}/${s.need}`)
     .join(' · ');
 }
+
+// ── v5 (SPEC §13): the communal Boatyard stockpile ───────────────────────
+// `stock` is a plain { itemId: n } object shared by everyone in the session (ctx.raft.stock).
+
+/** [{ id, have, need, stock }] where have = stock + own (countFn). `out` (optional) is reused. */
+export function stockNeedsStatus(stage, stock, countFn, out = []) {
+  out.length = 0;
+  if (!stage?.needs) return out;
+  for (const id in stage.needs) {
+    const s = Math.max(0, Math.floor(+stock?.[id] || 0));
+    const own = Math.max(0, Math.floor(+countFn(id) || 0));
+    out.push({ id, have: s + own, need: stage.needs[id], stock: s });
+  }
+  return out;
+}
+
+/** Build a stage from the stock first, then the builder's own inventory (removeFn(id, n)). Mutates `stock`.
+ *  Returns the { id: n } taken from the stock ({} when none), or null (and changes nothing) when short. */
+export function consumeStageStock(stage, stock, countFn, removeFn) {
+  const status = stockNeedsStatus(stage, stock, countFn);
+  if (!isReady(status)) return null;
+  const used = {};
+  for (const s of status) {
+    const fromStock = Math.min(s.stock, s.need);
+    if (fromStock > 0) {
+      stock[s.id] = s.stock - fromStock;
+      if (stock[s.id] <= 0) delete stock[s.id];
+      used[s.id] = fromStock;
+    }
+    const rest = s.need - fromStock;
+    if (rest > 0) removeFn(s.id, rest);
+  }
+  return used;
+}
+
+/** What a player can deposit: for every item the remaining stages need, min(own, remaining − stock). [{ id, n }] */
+export function depositList(plan, fromStage, stock, countFn) {
+  const rem = remainingNeeds(plan, fromStage);
+  const out = [];
+  for (const id in rem) {
+    const want = rem[id] - Math.max(0, Math.floor(+stock?.[id] || 0));
+    const n = Math.min(Math.max(0, Math.floor(+countFn(id) || 0)), want);
+    if (n > 0) out.push({ id, n });
+  }
+  return out;
+}
+
+/** stock[id] += n (n may be negative: clamped at 0, empty entries removed). Returns the new count. */
+export function addStock(stock, id, n) {
+  const v = Math.max(0, Math.floor((+stock[id] || 0) + (+n || 0)));
+  if (v > 0) stock[id] = v;
+  else delete stock[id];
+  return v;
+}
+
+/** Subtract a `used` map (from a remote stage build) from the stock. */
+export function applyUsed(stock, used) {
+  if (!used || typeof used !== 'object') return;
+  for (const id in used) addStock(stock, id, -(+used[id] || 0));
+}
+
+/** Replace `stock` in place with a sanitized copy of `src` (host raft:sync). */
+export function setStock(stock, src) {
+  for (const id in stock) delete stock[id];
+  if (!src || typeof src !== 'object') return stock;
+  for (const id in src) {
+    const n = Math.floor(+src[id] || 0);
+    if (n > 0 && n < 1e5) stock[id] = n;
+  }
+  return stock;
+}

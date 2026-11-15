@@ -281,3 +281,19 @@ export const MAP_LANDMARKS = [
 ];
 
 export const STRUCTURE_ICON = { campfire: '🔥', signal_fire: '💨', sos: '🆘', shelter: '🏕️', paddle_raft: '🛶' };
+
+/** v5 (V5-A): the backpack panel's help line (shown when no slot is selected). */
+export const PACK_HELP =
+  'Drag items between the backpack and the hotbar (drop on a stack to merge, Shift-drag to split it). Right-click drops a stack (Shift: one), or drag it out of the panel. Hover an item and press 1-9 to put it on that hotbar slot, Q to drop it.';
+
+/** v5: text lines for an inventory slot tooltip: { title, desc, stack, fx }. Pure (unit-tested). */
+export function slotTooltip(id, n, limit, showFx = true) {
+  const it = ITEMS[id];
+  if (!it) return null;
+  return {
+    title: `${it.icon} ${it.name}`,
+    desc: it.desc || '',
+    stack: limit > 1 ? `${n} / ${limit} in this stack` : 'One per slot',
+    fx: showFx ? effectSummary(it.effects) : '',
+  };
+}

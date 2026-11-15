@@ -3,7 +3,7 @@
 // craft or item use), never per frame, because the game is frozen while a panel is open.
 import { ITEMS, isConsumable } from '../core/items.js';
 import { fmtHour } from '../core/util.js';
-import { TIPS, PLANTS, SAFETY_BADGE, effectSummary, compassLabel, MAP_LANDMARKS, STRUCTURE_ICON, PART_WHERE, partsSummary } from './hud-data.js';
+import { TIPS, PLANTS, SAFETY_BADGE, effectSummary, compassLabel, MAP_LANDMARKS, STRUCTURE_ICON, PART_WHERE, partsSummary, PACK_HELP, slotTooltip } from './hud-data.js';
 
 function el(tag, cls, parent, text) {
   const e = document.createElement(tag);
@@ -46,7 +46,7 @@ export function createPanels(ctx, ui, host, map) {
   const panel = el('div', 'panel', host);
   // Clicking the dark backdrop closes the panel (a click is a user gesture, so pointer lock works).
   host.addEventListener('mousedown', (e) => {
-    if (e.target === host) ui.closePanel();
+    if (e.target === host && !drag) ui.closePanel();
   });
   // Keep wheel scrolling inside the panel lists.
   panel.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
@@ -64,10 +64,19 @@ export function createPanels(ctx, ui, host, map) {
   }
   function hide() {
     current = null;
+    renderedTab = null;
+    hoverSlot = -1;
+    endDrag?.();
+    tip.classList.remove('on');
     host.classList.remove('open');
   }
 
+  let renderedTab = null;
   function render() {
+    // keep the column scroll positions across a re-render of the same panel (drag & drop re-renders often)
+    const keep = renderedTab === current ? Array.from(panel.querySelectorAll('.panel-cols > div'), (d) => d.scrollTop) : null;
+    renderedTab = current;
+    tip.classList.remove('on');
     panel.textContent = '';
     const head = el('div', 'panel-head', panel);
     const titleBox = el('div', '', head);
@@ -84,6 +93,8 @@ export function createPanels(ctx, ui, host, map) {
     if (current === 'craft') renderCraft(titleBox);
     else if (current === 'journal') renderJournal(titleBox);
     else if (current === 'map') renderMap(titleBox);
+    if (keep) panel.querySelectorAll('.panel-cols > div').forEach((d, k) => (d.scrollTop = keep[k] || 0));
+    if (current === 'craft' && hoverSlot >= 0) showTip(hoverSlot);
   }
 
   // ── Crafting ───────────────────────────────────────────────────────────
@@ -131,39 +142,207 @@ export function createPanels(ctx, ui, host, map) {
     if (!list.some((r) => r.section === 'fire')) el('div', 'muted-note', left, '🔥 More recipes (herbal tea, nettle soup) appear while you stand at a lit fire.');
     if (!list.length) el('div', 'muted-note', left, 'Crafting is not available right now.');
 
-    // backpack
-    el('div', 'sec-title', right, 'Backpack');
-    const items = ctx.inventory?.list?.() || [];
-    const info = el('div', 'pack-info');
-    if (!items.length) el('div', 'muted-note', right, 'Empty. Look around: sticks, stones, plants…');
-    const grid = el('div', 'pack', right);
-    const showInfo = (id) => {
-      const it = ITEMS[id];
-      info.textContent = '';
-      if (!it) return;
-      el('b', '', info, `${it.icon} ${it.name}`);
-      info.append(' · ' + it.desc);
-      const fx = effectSummary(it.effects);
-      if (fx && (it.category !== 'food' || journal.plants.has(id) || !PLANTS.some((p) => p.id === id))) {
-        el('div', '', info, fx).style.marginTop = '4px';
-      }
-      if (isConsumable(id) || id === 'torch' || id === 'flare') el('div', '', info, 'Click to use.').style.color = 'var(--accent)';
-    };
-    for (const { id, n } of items) {
-      const it = ITEMS[id];
-      const usable = isConsumable(id) || id === 'torch' || id === 'flare';
-      const c = el('div', 'pack-item' + (usable ? ' usable' : ''), grid, it?.icon || '❔');
-      if (n > 1) el('span', 'slot-n', c, String(n));
-      c.addEventListener('mouseenter', () => showInfo(id));
-      if (usable)
-        c.addEventListener('click', () => {
-          ctx.inventory?.useItem?.(id);
-          render();
-        });
-    }
-    right.appendChild(info);
-    info.textContent = 'Hover an item to read about it.';
+    renderPack(right);
   }
+
+  // ── Backpack + hotbar slots (v5, V5-A): drag & drop, tooltip, drop ───────
+  const isClickUse = (id) => isConsumable(id) || id === 'torch' || id === 'flare';
+  const fxKnown = (id) => ITEMS[id]?.category !== 'food' || journal.plants.has(id) || !PLANTS.some((p) => p.id === id);
+  const tip = el('div', 'inv-tip', host);
+  let packSel = -1; // slot shown in the info box
+  let hoverSlot = -1;
+  let drag = null; // { from, x0, y0, moved, ghost, pid }
+  let mouseX = 0, mouseY = 0;
+  const lastClick = { i: -1, t: 0 };
+
+  function placeTip(x, y) {
+    const w = tip.offsetWidth || 240, h = tip.offsetHeight || 80;
+    let tx = x + 16, ty = y + 14;
+    if (tx + w > window.innerWidth - 8) tx = x - w - 12;
+    if (ty + h > window.innerHeight - 8) ty = y - h - 10;
+    tip.style.transform = `translate(${Math.max(4, tx)}px, ${Math.max(4, ty)}px)`;
+  }
+  function showTip(i) {
+    const inv = ctx.inventory;
+    const st = inv?.slots?.[i];
+    if (!st || drag?.moved) {
+      tip.classList.remove('on');
+      return;
+    }
+    const t = slotTooltip(st.id, st.n, inv.stackLimit?.(st.id) ?? 20, fxKnown(st.id));
+    if (!t) return;
+    tip.textContent = '';
+    el('b', '', tip, t.title);
+    if (t.desc) el('div', 'tt-desc', tip, t.desc);
+    if (t.fx) el('div', 'tt-fx', tip, t.fx);
+    el('div', 'tt-n', tip, t.stack + (isClickUse(st.id) ? ' · double-click to use' : ''));
+    tip.classList.add('on');
+    placeTip(mouseX, mouseY);
+  }
+  function hideTip() {
+    tip.classList.remove('on');
+  }
+  function endDrag() {
+    if (!drag) return;
+    drag.ghost?.remove();
+    drag.src?.classList.remove('dragging');
+    drag = null;
+  }
+  function dropFrom(i, one) {
+    const n = ctx.inventory?.dropSlot?.(i, one ? 1 : undefined);
+    if (n && !ctx.inventory?.slots?.[i] && packSel === i) packSel = -1;
+    render();
+  }
+
+  function slotEl(parent, i, hot) {
+    const inv = ctx.inventory;
+    const st = inv.slots[i];
+    const c = el('div', 'inv-slot' + (hot ? ' hot' : '') + (st ? '' : ' empty') + (i === packSel ? ' picked' : ''), parent);
+    c.dataset.slot = String(i);
+    if (hot) {
+      el('span', 'inv-key', c, String(i + 1));
+      if (i === inv.selectedIndex) c.classList.add('cur');
+    }
+    if (st) {
+      el('span', 'inv-icon', c, ITEMS[st.id]?.icon || '❔');
+      if (st.n > 1) el('span', 'slot-n', c, String(st.n));
+      if (isClickUse(st.id)) c.classList.add('usable');
+    }
+    c.addEventListener('pointerenter', () => {
+      hoverSlot = i;
+      showTip(i);
+    });
+    c.addEventListener('pointerleave', () => {
+      if (hoverSlot === i) hoverSlot = -1;
+      if (!drag) hideTip();
+    });
+    c.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (inv.slots[i]) dropFrom(i, e.shiftKey);
+    });
+    c.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      endDrag();
+      drag = { from: i, x0: e.clientX, y0: e.clientY, moved: false, ghost: null, src: c, pid: e.pointerId };
+      try {
+        c.setPointerCapture(e.pointerId);
+      } catch (_) {
+        /* ignore */
+      }
+    });
+    c.addEventListener('pointermove', (e) => {
+      if (!drag || drag.src !== c) return;
+      if (!drag.moved) {
+        if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 5 || !inv.slots[i]) return;
+        drag.moved = true;
+        hideTip();
+        c.classList.add('dragging');
+        drag.ghost = el('div', 'inv-ghost', host, ITEMS[inv.slots[i].id]?.icon || '❔');
+      }
+      drag.ghost.classList.toggle('split', e.shiftKey);
+      drag.ghost.style.transform = `translate(${e.clientX - 24}px, ${e.clientY - 24}px)`;
+    });
+    c.addEventListener('pointerup', (e) => {
+      if (!drag || drag.src !== c) return;
+      const d = drag;
+      endDrag();
+      if (!d.moved) {
+        // a click selects the slot (info box + Drop buttons); a second click within 350 ms uses it
+        // (manual double-click: the re-render replaces the element, so the native dblclick never fires)
+        const now = performance.now();
+        const s2 = inv.slots[i];
+        if (s2 && lastClick.i === i && now - lastClick.t < 350 && isClickUse(s2.id)) {
+          lastClick.i = -1;
+          inv.useItem?.(s2.id);
+          packSel = inv.slots[i] ? i : -1;
+        } else {
+          lastClick.i = i;
+          lastClick.t = now;
+          packSel = s2 ? i : -1;
+        }
+        render();
+        return;
+      }
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      const target = under?.closest?.('[data-slot]');
+      // pointer capture swallowed the enter/leave events: hover is wherever the drag ended
+      hoverSlot = target ? Number(target.dataset.slot) : -1;
+      if (target) {
+        const to = Number(target.dataset.slot);
+        if (inv.move?.(d.from, to, { split: e.shiftKey }) && packSel === d.from) packSel = inv.slots[d.from] ? d.from : to;
+        render();
+      } else if (!under || !panel.contains(under)) dropFrom(d.from, e.shiftKey); // released outside the panel
+    });
+    c.addEventListener('pointercancel', endDrag);
+  }
+
+  function renderPack(right) {
+    const inv = ctx.inventory;
+    if (!inv?.slots) {
+      el('div', 'muted-note', right, 'Your backpack is not available.');
+      return;
+    }
+    const H = inv.HOT ?? 9;
+    const total = inv.slots.length;
+    let used = 0;
+    for (let i = H; i < total; i++) if (inv.slots[i]) used++;
+    const head = el('div', 'sec-title', right, 'Backpack');
+    el('span', 'inv-cap', head, `${used}/${total - H}`);
+    const grid = el('div', 'inv-grid', right);
+    for (let i = H; i < total; i++) slotEl(grid, i, false);
+    el('div', 'sec-title', right, 'Hotbar');
+    const bar = el('div', 'inv-hotrow', right);
+    for (let i = 0; i < H; i++) slotEl(bar, i, true);
+
+    const info = el('div', 'pack-info', right);
+    const st = packSel >= 0 ? inv.slots[packSel] : null;
+    if (!st) {
+      packSel = -1;
+      if (!inv.list?.().length) el('div', '', info, 'Empty. Look around: sticks, stones, plants…').style.marginBottom = '4px';
+      info.append(PACK_HELP);
+      return;
+    }
+    const it = ITEMS[st.id];
+    el('b', '', info, `${it?.icon || ''} ${it?.name || st.id}${st.n > 1 ? ' ×' + st.n : ''}`);
+    info.append(' · ' + (it?.desc || ''));
+    const fx = effectSummary(it?.effects);
+    if (fx && fxKnown(st.id)) el('div', '', info, fx).style.marginTop = '4px';
+    const acts = el('div', 'inv-acts', info);
+    if (isClickUse(st.id)) {
+      const u = el('button', 'btn', acts, 'Use');
+      u.addEventListener('click', () => {
+        inv.useItem?.(st.id);
+        render();
+      });
+    }
+    const dAll = el('button', 'btn', acts, st.n > 1 ? `Drop all (${st.n})` : 'Drop');
+    dAll.title = 'Right-click a slot to drop its stack';
+    dAll.addEventListener('click', () => dropFrom(packSel, false));
+    if (st.n > 1) {
+      const d1 = el('button', 'btn', acts, 'Drop 1');
+      d1.title = 'Shift + right-click a slot drops one';
+      d1.addEventListener('click', () => dropFrom(packSel, true));
+    }
+  }
+
+  host.addEventListener('pointermove', (e) => {
+    mouseX = e.clientX;
+    mouseY = e.clientY;
+    if (tip.classList.contains('on')) placeTip(mouseX, mouseY);
+  });
+  // Hover a slot + 1-9: put it on that hotbar slot; + Q: drop it (Shift: one).
+  window.addEventListener('keydown', (e) => {
+    if (current !== 'craft' || hoverSlot < 0 || !ctx.inventory?.slots) return;
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    const m = /^Digit([1-9])$/.exec(e.code);
+    if (m) {
+      e.preventDefault();
+      if (ctx.inventory.move?.(hoverSlot, Number(m[1]) - 1)) render();
+    } else if (e.code === 'KeyQ' && ctx.inventory.slots[hoverSlot]) {
+      e.preventDefault();
+      dropFrom(hoverSlot, e.shiftKey);
+    }
+  });
 
   // ── Journal ────────────────────────────────────────────────────────────
   function renderJournal(titleBox) {

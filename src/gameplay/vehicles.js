@@ -14,10 +14,18 @@
 // never capsizes, [E] disembark near land or the dock, [R] "Head for home" far out at sea (or automatically beyond
 // 1300 m) -> cinematic -> raft:sailed { plan: 'motorboat_dock', name: "the fisherman's motorboat", day }.
 // Once started, this module owns the motorboat's transform (it sets motorboat.moored = false).
-// Events out: vehicle:placed {type}, vehicle:board {type}, vehicle:leave {type}, vehicle:capsized {type}, raft:sailed.
+// Events out: vehicle:placed {type, vid, x, z, heading}, vehicle:board {type}, vehicle:leave {type}, vehicle:capsized {type},
+//             raft:sailed; v5 (online only): vehicle:pose {vid, x, z, heading, roll, cap}; vehicle:seat {vid, seat, playerId}
+//             and the join-time vehicle:placed re-announce go straight out through ctx.net.relay (not the bus).
+// v5 (V5-B, SPEC §13) co-op: every paddle raft has 2 seats (seat 0 paddles, seat 1 rides along with free look). Rafts
+// placed by other players are mirrored (remotes, keyed by vid "<netId>:raft") and boardable. The seat-0 occupant (else
+// the raft's owner) simulates a raft and broadcasts vehicle:pose at ~10 Hz; everyone else interpolates it
+// (CONFIG.net.interpolationMs behind). A capsize (simulator side) throws everyone off (cap flag in the pose).
+// net.js calls applyRemote(name, payload, from). Offline everything is exactly as before (one raft, you paddle).
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import * as V from './vehicle-logic.js';
+import * as CO from './vehicle-coop.js';
 import { makePaddleRaft, makeHandPaddle } from './vehicle-meshes.js';
 import { createSailAway } from './vehicle-cine.js';
 
@@ -38,6 +46,21 @@ export function create(ctx) {
   const rand = typeof ctx.rng?.fork === 'function' ? ctx.rng.fork('vehicles') : Math.random;
 
   let raft = null; // the paddle raft record (one at a time)
+  // v5 co-op
+  const remotes = new Map(); // vid -> raft record placed by another player
+  const allRafts = []; // own raft (if any) + remotes, for the per-frame loops (no iterator allocation)
+  let mySeat = -1; // our seat index on `current` (rafts), else -1
+  const sample = { x: 0, z: 0, heading: 0, roll: 0, cap: 0 };
+  const poseOut = { vid: '', x: 0, z: 0, heading: 0, roll: 0, cap: 0 };
+  const online = () => !!ctx.net?.connected && !!ctx.net.id;
+  const ownVid = () => `${ctx.net?.id || 'local'}:raft`;
+  const wireVid = (r) => (r.own ? ownVid() : r.vid);
+  const nowSec = () => ctx.net?.now?.() ?? (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000; // net.now: tests
+  // ~2.5 pose intervals at 10 Hz, so ordinary network jitter never runs the sampler dry (the passenger's camera rides it)
+  const interpSec = () => Math.max(CONFIG.net?.interpolationMs ?? 120, 250) / 1000;
+  const toWire = (who) => (who === CO.ME ? ctx.net?.id ?? null : who);
+  const fromWire = (id) => (id != null && id === ctx.net?.id ? CO.ME : id);
+  const nameOfPlayer = (id) => ctx.net?.players?.get?.(id)?.name || 'Your friend';
   let mb = null; // the motorboat record (wraps ctx.isle2.motorboat)
   let mbFueled = false;
   let current = null;
@@ -116,15 +139,25 @@ export function create(ctx) {
   }
 
   // ── Paddle raft ─────────────────────────────────────────────────────────
-  function makeRaft() {
+  function makeRaft(own = true, vid = null, owner = CO.ME) {
     const m = makePaddleRaft(rand);
     ctx.scene.add(m.group);
-    return {
+    const r = {
       type: 'paddle_raft',
       name: 'Paddle raft',
       object: m.group,
       body: m.body,
       seat: m.seat,
+      seat2: m.seat2,
+      // v5 co-op
+      own,
+      vid,
+      owner,
+      seats: CO.makeSeats(),
+      poses: CO.createPoseBuffer(6),
+      simMe: true,
+      sendAcc: 0,
+      sent: { x: NaN, z: NaN, heading: NaN, cap: -1 },
       seatEye: V.RAFT.seatEye,
       halfLen: V.RAFT.length / 2,
       heading: 0,
@@ -139,6 +172,15 @@ export function create(ctx) {
       handW: 0,
       aground: false,
     };
+    allRafts.push(r);
+    return r;
+  }
+  function disposeRaft(r) {
+    const i = allRafts.indexOf(r);
+    if (i >= 0) allRafts.splice(i, 1);
+    if (r.vid) remotes.delete(r.vid);
+    ctx.scene?.remove?.(r.object);
+    r.object.traverse?.((o) => o.isInstancedMesh && o.dispose?.());
   }
 
   function findRaftSpot() {
@@ -153,6 +195,10 @@ export function create(ctx) {
     if (!spot?.ok) spot = findRaftSpot();
     if (!spot?.ok) {
       toast(spot?.reason || "Build it at the water's edge.", { icon: '🪵', kind: 'warn', key: 'craft' });
+      return null;
+    }
+    if (raft && raft.seats.some((x) => x != null && x !== CO.ME)) {
+      toast('Someone is aboard your raft: wait until they get off.', { icon: '🪵', kind: 'warn', key: 'craft' });
       return null;
     }
     const replaced = !!raft;
@@ -178,7 +224,8 @@ export function create(ctx) {
       'paddle_raft',
       'Paddle raft: W/S paddle, A/D steer, E to get off near land. Paddling tires you. Tempest Isle is ~525 m off the north-east beach: storms out there can flip a raft!'
     );
-    ev.emit('vehicle:placed', { type: 'paddle_raft' });
+    r.poses.clear();
+    ev.emit('vehicle:placed', { type: 'paddle_raft', vid: ownVid(), x: r.object.position.x, z: r.object.position.z, heading: r.heading });
     return r;
   }
 
@@ -189,13 +236,19 @@ export function create(ctx) {
     r.speed = 0;
     const dir = rand() < 0.5 ? -1 : 1;
     r.flip = { t: 0, dur: 1.3, from: r.body.rotation.z, to: Math.PI * dir, y0: r.body.position.y, y1: 0.12 };
+    r.sendAcc = 1e9; // co-op: tell the others at once (they are thrown off too)
     play('splash', { position: o.position, volume: 1.1 });
     if (current === r) {
       const rx = -V.fwdZ(r.heading), rz = V.fwdX(r.heading);
       leaveVehicle();
       ctx.player?.teleport?.(x + rx * dir * 2.3, z + rz * dir * 2.3);
       ctx.ui?.flash?.('#cfe9ff', 0.6, 0.45);
-      toast('A huge wave flips the raft! You are thrown into the sea.', { icon: '🌊', kind: 'bad', key: 'raft-capsize', duration: 6 });
+      toast(r.seats.some((x) => x != null) ? 'A huge wave flips the raft! You are both thrown into the sea.' : 'A huge wave flips the raft! You are thrown into the sea.', {
+        icon: '🌊',
+        kind: 'bad',
+        key: 'raft-capsize',
+        duration: 6,
+      });
       ctx.ui?.hint?.('raft_right', 'Your raft is upside down. Swim next to it and press E to right it once the storm eases, or swim for the shore.');
     } else if (hdist(r) < 120) {
       toast('The storm flips your empty raft over!', { icon: '⛈️', kind: 'warn', key: 'raft-capsize' });
@@ -203,9 +256,12 @@ export function create(ctx) {
     ev.emit('vehicle:capsized', { type: r.type });
   }
 
-  function rightRaft() {
-    const r = raft;
+  function rightRaft(r = raft) {
     if (!r?.capsized || r.flip) return;
+    if (!r.simMe) {
+      toast(`${nameOfPlayer(r.owner)} has to right their raft.`, { icon: '🪵', kind: 'info', key: 'raft-right' });
+      return;
+    }
     if (!V.canRight(stormAt(r.object.position.x, r.object.position.z))) {
       toast('The waves are too wild to right it. Wait for the storm to ease.', { icon: '⛈️', kind: 'warn', key: 'raft-right' });
       return;
@@ -221,20 +277,23 @@ export function create(ctx) {
     toast('You heave the raft back over. Climb aboard with E.', { icon: '🪵', kind: 'good', key: 'raft-right' });
   }
 
-  function updateRaft(dt) {
-    const r = raft, o = r.object, W = ctx.world;
+  function updateFlip(r, dt) {
+    const f = r.flip;
+    if (!f) return;
+    f.t += dt;
+    const k = clamp01(f.t / f.dur), e = k * k * (3 - 2 * k);
+    r.body.rotation.z = f.from + (f.to - f.from) * e;
+    r.body.position.y = f.y0 + (f.y1 - f.y0) * e + Math.sin(k * Math.PI) * 0.55;
+    if (k >= 1) r.flip = null;
+  }
+
+  function updateRaft(dt, r = raft) {
+    const o = r.object, W = ctx.world;
     const x = o.position.x, z = o.position.z;
     const storm = stormAt(x, z);
     const aboard = current === r;
-    if (r.flip) {
-      const f = r.flip;
-      f.t += dt;
-      const k = clamp01(f.t / f.dur), e = k * k * (3 - 2 * k);
-      r.body.rotation.z = f.from + (f.to - f.from) * e;
-      r.body.position.y = f.y0 + (f.y1 - f.y0) * e + Math.sin(k * Math.PI) * 0.55;
-      if (k >= 1) r.flip = null;
-    }
-    const ctl = aboard && controllable();
+    updateFlip(r, dt);
+    const ctl = aboard && mySeat === 0 && controllable();
     const inp = ctx.input;
     let thr = 0, turn = 0;
     if (ctl) {
@@ -272,7 +331,7 @@ export function create(ctx) {
     // motion: paddling + wind drift (much stronger in a storm)
     V.windDrift(ctx.weather?.wind, storm, drift);
     // a raft left empty in the shallows stays put unless a storm or a capsize sets it adrift
-    const df = r.capsized ? 0.9 : aboard || storm > V.RIGHT_STORM ? 0.55 : 0;
+    const df = r.capsized ? 0.9 : aboard || r.seats[0] != null || r.seats[1] != null || storm > V.RIGHT_STORM ? 0.55 : 0;
     let vx = V.fwdX(r.heading) * r.speed + drift.x * df;
     let vz = V.fwdZ(r.heading) * r.speed + drift.z * df;
     // too far out on the open sea: the swell turns a little raft back
@@ -309,8 +368,223 @@ export function create(ctx) {
     if (!r.capsized && !r.flip && storm > V.CAPSIZE_STORM && rand() < V.capsizeChance(storm, dt, IC.capsizePerSec)) capsize(r);
   }
 
+  // ── v5 co-op: who simulates, interpolation, pose broadcast ─────────────
+  function stepRaft(r, dt) {
+    const sim = CO.simulatorOf(r.seats, r.own ? CO.ME : r.owner) === CO.ME;
+    if (sim !== r.simMe) {
+      r.simMe = sim;
+      if (sim) r.speed = 0; // taking over from the interpolated pose
+      else seedPoses(r);
+    }
+    if (sim) {
+      updateRaft(dt, r);
+      if (online()) sendPose(r, dt);
+    } else updateRemote(r, dt);
+  }
+  /** Start a fresh interpolation from where the raft is now (a new simulator takes over). */
+  function seedPoses(r) {
+    r.poses.clear();
+    r.poses.push(nowSec() - 1, r.object.position.x, r.object.position.z, r.heading, 0, r.capsized ? 1 : 0);
+  }
+  function sendPose(r, dt) {
+    r.sendAcc += dt;
+    const o = r.object.position, s = r.sent, cap = r.capsized ? 1 : 0;
+    const moved = Math.abs(o.x - s.x) > 0.02 || Math.abs(o.z - s.z) > 0.02 || Math.abs(V.wrapAngle(r.heading - s.heading)) > 0.005 || cap !== s.cap || !(s.x === s.x);
+    if (!CO.poseDue(r.sendAcc, moved, 10)) return;
+    r.sendAcc = 0;
+    s.x = o.x;
+    s.z = o.z;
+    s.heading = r.heading;
+    s.cap = cap;
+    poseOut.vid = wireVid(r);
+    poseOut.x = Math.round(o.x * 100) / 100;
+    poseOut.z = Math.round(o.z * 100) / 100;
+    poseOut.heading = Math.round(V.wrapAngle(r.heading) * 1000) / 1000;
+    poseOut.roll = Math.round((r.object.rotation.z || 0) * 1000) / 1000;
+    poseOut.cap = cap;
+    ev.emit('vehicle:pose', poseOut);
+  }
+  function updateRemote(r, dt) {
+    updateFlip(r, dt);
+    if (!r.poses.sample(nowSec() - interpSec(), sample)) return;
+    const o = r.object;
+    const dh = V.wrapAngle(sample.heading - r.heading);
+    o.position.x = sample.x;
+    o.position.z = sample.z;
+    r.heading = sample.heading;
+    if (current === r && dh && ctx.player) ctx.player.yaw += dh; // the view turns with the deck
+    r.speed = 0;
+    float(r, dt, 0, 1.4, 0.8);
+    const cap = !!sample.cap;
+    if (cap !== r.capsized) {
+      r.capsized = cap;
+      const dir = (sample.roll || 0) < 0 ? -1 : 1;
+      r.flip = { t: 0, dur: cap ? 1.3 : 1.1, from: r.body.rotation.z, to: cap ? Math.PI * dir : 0, y0: r.body.position.y, y1: cap ? 0.12 : 0 };
+      if (cap) {
+        play('splash', { position: o.position, volume: 1.1 });
+        if (current === r) throwOff(r, dir);
+      }
+    }
+  }
+  function throwOff(r, dir) {
+    const x = r.object.position.x, z = r.object.position.z;
+    const rx = -V.fwdZ(r.heading), rz = V.fwdX(r.heading);
+    leaveVehicle();
+    ctx.player?.teleport?.(x + rx * dir * 2.3, z + rz * dir * 2.3);
+    ctx.ui?.flash?.('#cfe9ff', 0.6, 0.45);
+    toast('A huge wave flips the raft! You are both thrown into the sea.', { icon: '🌊', kind: 'bad', key: 'raft-capsize', duration: 6 });
+  }
+
+  // ── v5 co-op: seats ────────────────────────────────────────────────────
+  const seatObj = (rec, i) => (i === 1 && rec.seat2 ? rec.seat2 : rec.seat);
+  function announceSeat(rec, seat, who) {
+    if (!online() || !rec.seats) return;
+    // straight to the relay: this also runs while net.js applies a remote seat claim (its loop guard would drop a bus emit)
+    ctx.net?.relay?.('vehicle:seat', { vid: wireVid(rec), seat, playerId: who == null ? null : toWire(who) });
+  }
+  /** Move ourselves to another seat of the raft we are on. */
+  function switchSeat(to) {
+    const rec = current;
+    if (!rec?.seats || mySeat < 0 || mySeat === to || rec.seats[to] != null) return false;
+    rec.seats[mySeat] = null;
+    rec.seats[to] = CO.ME;
+    mySeat = to;
+    ctx.player?.setSeat?.(seatObj(rec, to), rec);
+    announceSeat(rec, to, CO.ME);
+    if (to === 0 && !count('paddle')) toast('No paddle: you can only drift. Craft a Wooden Paddle (wood 2 + rope 1).', { icon: '🛶', kind: 'warn', key: 'raft-paddle' });
+    return true;
+  }
+  /** A raft record by wire vid ('<netId>:raft'); `create` mirrors an unknown remote raft. */
+  function raftByVid(vid, from, create) {
+    if (typeof vid !== 'string') return null;
+    if (vid === ownVid()) return raft;
+    let r = remotes.get(vid);
+    if (!r && create && ctx.scene) {
+      r = makeRaft(false, vid, from ?? null);
+      r.simMe = false;
+      remotes.set(vid, r);
+    }
+    return r || null;
+  }
+  function placeRemote(r, x, z, heading) {
+    if (r.own) return;
+    r.capsized = false;
+    r.flip = null;
+    r.body.rotation.set(0, 0, 0);
+    r.body.position.set(0, 0, 0);
+    r.heading = heading;
+    r.object.position.set(x, surface(x, z), z);
+    r.object.visible = true;
+    float(r, 0, 0, 1.4, 0.8);
+    r.poses.clear();
+    r.poses.push(nowSec() - 1, x, z, heading, 0, 0);
+  }
+  /** net.js: a relayed vehicle:* event from player `from`. */
+  function applyRemote(name, p, from) {
+    if (!p || typeof p !== 'object' || from == null) return false;
+    if (name === 'vehicle:placed') {
+      if ((p.type ?? 'paddle_raft') !== 'paddle_raft' || !Number.isFinite(p.x) || !Number.isFinite(p.z)) return false;
+      const r = raftByVid(p.vid, from, true);
+      if (!r || r.own) return false;
+      if (current === r) return true; // re-announce while we ride it: keep the live pose
+      placeRemote(r, p.x, p.z, Number.isFinite(p.heading) ? p.heading : 0);
+      return true;
+    }
+    if (name === 'vehicle:pose') {
+      if (!Number.isFinite(p.x) || !Number.isFinite(p.z) || !Number.isFinite(p.heading)) return false;
+      const r = raftByVid(p.vid, from, true);
+      if (!r) return false;
+      if (r.simMe) return false; // we are authoritative for it right now
+      if (r.poses.length === 0) placeRemote(r, p.x, p.z, p.heading);
+      r.poses.push(nowSec(), p.x, p.z, p.heading, Number.isFinite(p.roll) ? p.roll : 0, p.cap ? 1 : 0);
+      return true;
+    }
+    if (name === 'vehicle:seat') {
+      if (!(p.seat === 0 || p.seat === 1)) return false;
+      // a seat can arrive before the owner's vehicle:placed (different senders): mirror it hidden until placed
+      const known = typeof p.vid === 'string' && (p.vid === ownVid() || remotes.has(p.vid));
+      const r = raftByVid(p.vid, String(p.vid).split(':')[0] || from, p.playerId != null);
+      if (!r) return false;
+      if (!known && !r.own) r.object.visible = false;
+      const res = CO.applySeatClaim(r.seats, p.seat, from, p.playerId == null ? null : from, ctx.net?.id);
+      if (res === 'kept') announceSeat(r, p.seat, CO.ME);
+      else if (res === 'yield' && current === r) {
+        mySeat = -1;
+        const other = CO.freeSeat(r.seats);
+        if (other >= 0) {
+          r.seats[other] = CO.ME;
+          mySeat = other;
+          ctx.player?.setSeat?.(seatObj(r, other), r);
+          announceSeat(r, other, CO.ME);
+        } else {
+          const spot = findLanding(r);
+          leaveVehicle();
+          if (spot) ctx.player?.teleport?.(spot.x, spot.z);
+          toast('The raft is full.', { icon: '🛶', kind: 'warn', key: 'raft-full' });
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+  /** v5 (net.js): feet position of remote player `id` if they sit on one of our rafts (their avatar is drawn there,
+   *  not at their own lagged copy). Writes `out` and returns true on a hit. */
+  function seatFeet(id, out) {
+    for (let i = 0; i < allRafts.length; i++) {
+      const r = allRafts[i], k = r.seats.indexOf(id);
+      if (k < 0 || !r.object.visible) continue;
+      const so = seatObj(r, k);
+      so.updateWorldMatrix(true, false);
+      out.setFromMatrixPosition(so.matrixWorld);
+      out.y -= r.seatEye ?? V.RAFT.seatEye;
+      return true;
+    }
+    return false;
+  }
+  /** Tell (new) players about our raft and the seats we hold. */
+  function announce() {
+    if (!online()) return;
+    const r = raft;
+    if (r) {
+      // straight to the relay (not the bus: the HUD would log "Built a paddle raft" again)
+      ctx.net?.relay?.('vehicle:placed', { type: 'paddle_raft', vid: ownVid(), x: r.object.position.x, z: r.object.position.z, heading: r.heading });
+      r.sendAcc = 1e9;
+      r.sent.cap = -1;
+    }
+    if (current?.seats && mySeat >= 0) announceSeat(current, mySeat, CO.ME);
+  }
+  function onPlayerLeft(m) {
+    const id = m?.id;
+    if (id == null) return;
+    for (let i = allRafts.length - 1; i >= 0; i--) {
+      const r = allRafts[i];
+      CO.releaseSeats(r.seats, id);
+      if (r.own || r.owner !== id) continue;
+      if (current === r) {
+        r.owner = CO.ME; // we are riding it: it is ours now
+        toast(`${m.name || nameOfPlayer(id)} left: the raft is yours now.`, { icon: '🛶', kind: 'info', key: 'raft-adopt' });
+      } else disposeRaft(r);
+    }
+  }
+  function onDisconnected() {
+    for (let i = allRafts.length - 1; i >= 0; i--) {
+      const r = allRafts[i];
+      if (r.own) {
+        CO.clearRemote(r.seats);
+        continue;
+      }
+      if (current === r) {
+        if (r.owner !== CO.ME) {
+          // keep riding: it becomes a local raft until it is left
+          r.owner = CO.ME;
+        }
+        CO.clearRemote(r.seats);
+      } else disposeRaft(r);
+    }
+  }
+
   function updateHand(dt) {
-    const show = !!raft && current === raft && !raft.capsized && count('paddle') > 0 && !ctx.flags.cinematic;
+    const show = !!current && current.type === 'paddle_raft' && mySeat === 0 && !current.capsized && count('paddle') > 0 && !ctx.flags.cinematic;
     if (!hand) {
       if (!show) return;
       hand = makeHandPaddle();
@@ -318,7 +592,7 @@ export function create(ctx) {
     }
     hand.visible = show;
     if (!show) return;
-    const r = raft;
+    const r = current;
     r.handW = damp(r.handW, r.paddling ? 1 : 0, 4, dt);
     const ph = (r.stroke % 1) * TAU, side = r.strokeSide, w = r.handW;
     const sw = Math.sin(ph) * w;
@@ -515,18 +789,28 @@ export function create(ctx) {
     if (!rec || current || cine) return;
     const pl = ctx.player;
     if (!pl?.setSeat) return;
+    let seat = 0;
     if (rec.type === 'paddle_raft') {
       if (rec.capsized || rec.flip) return;
-      if (!count('paddle')) toast('No paddle: you can only drift. Craft a Wooden Paddle (wood 2 + rope 1).', { icon: '🛶', kind: 'warn', key: 'raft-paddle' });
+      seat = rec.seats ? CO.freeSeat(rec.seats) : 0;
+      if (seat < 0) {
+        toast('The raft is full.', { icon: '🛶', kind: 'warn', key: 'raft-full' });
+        return;
+      }
+      if (seat === 0 && !count('paddle')) toast('No paddle: you can only drift. Craft a Wooden Paddle (wood 2 + rope 1).', { icon: '🛶', kind: 'warn', key: 'raft-paddle' });
+      if (seat === 1) toast(`You climb aboard as a passenger: ${nameOfPlayer(rec.seats[0])} paddles. Look around freely, E to get off near land.`, { icon: '🛶', kind: 'info', key: 'raft-passenger' });
       play('splash', { position: rec.object.position, volume: 0.3 });
+      if (rec.seats) rec.seats[seat] = CO.ME;
     }
     current = rec;
-    pl.setSeat(rec.seat, rec);
+    mySeat = rec.seats ? seat : -1;
+    pl.setSeat(seatObj(rec, seat), rec);
     pl.yaw = rec.heading;
     pl.pitch = -0.12;
     landing = null;
     landingAcc = 1;
     pl.syncSeat?.(0);
+    if (rec.seats) announceSeat(rec, seat, CO.ME);
     ev.emit('vehicle:board', { type: rec.type });
   }
 
@@ -536,6 +820,11 @@ export function create(ctx) {
     current = null;
     homeOk = false;
     landing = null;
+    if (rec.seats && mySeat >= 0) {
+      if (rec.seats[mySeat] === CO.ME) rec.seats[mySeat] = null;
+      announceSeat(rec, mySeat, null);
+    }
+    mySeat = -1;
     if (ctx.player?.aboard) ctx.player.setSeat(null);
     if (rec.type === 'motorboat' && engineOn) {
       ctx.audio?.setLoop?.('engine', 0);
@@ -577,20 +866,24 @@ export function create(ctx) {
     if (cine || ctx.state !== 'playing') return null;
     if (current) {
       const label = landing ? 'Disembark' : '';
-      const secondary = current === mb && homeOk ? { label: 'Head for home', onUse: () => headHome(false) } : null;
+      let secondary = current === mb && homeOk ? { label: 'Head for home', onUse: () => headHome(false) } : null;
+      if (!secondary && mySeat === 1 && current.seats?.[0] == null && !current.capsized) secondary = takePaddle;
       if (!label && !secondary) return null;
       return { label, onUse: disembark, secondary, score: 10 };
     }
     let best = null;
-    if (raft && !raft.flip) {
-      const d = Math.max(0, hdist(raft) - 0.6);
-      if (d <= VC.boardRadius) {
-        const score = 2.4 + facing(raft) * 0.8 - d * 0.12;
-        if (raft.capsized) {
-          const ok = V.canRight(stormAt(raft.object.position.x, raft.object.position.z));
-          best = { label: ok ? 'Right the raft' : 'Right the raft (wait for the storm to ease)', onUse: rightRaft, score };
-        } else best = { label: 'Board the raft', onUse: () => board(raft), score };
-      }
+    for (let i = 0; i < allRafts.length; i++) {
+      const r = allRafts[i];
+      if (r.flip || !r.object.visible) continue;
+      const d = Math.max(0, hdist(r) - 0.6);
+      if (d > VC.boardRadius) continue;
+      const score = 2.4 + facing(r) * 0.8 - d * 0.12;
+      if (best && score <= best.score) continue;
+      if (r.capsized) {
+        const ok = V.canRight(stormAt(r.object.position.x, r.object.position.z));
+        best = { label: ok ? 'Right the raft' : 'Right the raft (wait for the storm to ease)', onUse: () => rightRaft(r), score };
+      } else if (CO.freeSeat(r.seats) < 0) best = { label: 'The raft is full', onUse: () => toast('The raft is full.', { icon: '🛶', kind: 'warn', key: 'raft-full' }), score };
+      else best = { label: 'Board the raft', onUse: () => board(r), score };
     }
     const m = mb;
     if (m) {
@@ -602,6 +895,8 @@ export function create(ctx) {
     }
     return best;
   }
+
+  const takePaddle = { label: 'Take the paddle', onUse: () => switchSeat(0) };
 
   // ── Debug ──────────────────────────────────────────────────────────────
   function debugRaft() {
@@ -651,6 +946,15 @@ export function create(ctx) {
     get canDisembark() {
       return !!landing;
     },
+    /** v5: rafts placed by other players (vid -> record). */
+    remotes,
+    /** v5: our seat on the current raft (0 paddler, 1 passenger), else -1. */
+    get seat() {
+      return mySeat;
+    },
+    applyRemote,
+    switchSeat,
+    seatFeet,
     findRaftSpot,
     placeRaft,
     board,
@@ -661,6 +965,10 @@ export function create(ctx) {
     debugCapsize: () => capsize(raft),
     init() {
       ctx.interact?.addProvider?.(provider);
+      ev.on?.('net:connected', announce);
+      ev.on?.('net:playerJoined', announce);
+      ev.on?.('net:playerLeft', onPlayerLeft);
+      ev.on?.('net:disconnected', onDisconnected);
     },
     update(dt) {
       if (ctx.state !== 'playing') {
@@ -679,7 +987,7 @@ export function create(ctx) {
       // stood up by something else (teleport, death fall…)
       if (current && ctx.player && ctx.player.aboard !== current) leaveVehicle();
       syncMotorboat();
-      if (raft) updateRaft(dt);
+      for (let i = 0; i < allRafts.length; i++) stepRaft(allRafts[i], dt);
       if (mb) updateMotorboat(dt);
       if (cine) return; // headHome() just started
       if (current) {

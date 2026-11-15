@@ -12,9 +12,14 @@
 // the SHARED_EVENTS of protocol.js are relayed and applied remotely under a module-level `applying` guard so applied
 // events never re-send. Remote players are drawn with src/player/avatar.js, buffered CONFIG.net.interpolationMs back.
 // The chat + player list live in ./netUI.js (loaded lazily so this module imports cleanly in node).
+// v5 (V5-B, SPEC §13): item:dropped / drop:picked → ctx.resources.spawnDrop / removeDrop; raft:deposit / raft:sync /
+// raft:stage{used} → ctx.raft.applyDeposit / applySync / applyStage; vehicle:placed / pose / seat → ctx.vehicles.applyRemote.
+// PAUSED_OK_EVENTS also go out while paused (join-time sync). ctx.net.relay(name, payload) sends one shared event
+// straight to the room (packed, not via the bus).
 import { CONFIG } from '../config.js';
-import { MSG, ERRORS, PROTOCOL_VERSION, SHARED_EVENTS, encode, decode, normalizeRoomCode, sanitizeName, sanitizeChat, colorForId } from './protocol.js';
+import { MSG, ERRORS, PROTOCOL_VERSION, SHARED_EVENTS, PAUSED_OK_EVENTS, encode, decode, normalizeRoomCode, sanitizeName, sanitizeChat, colorForId } from './protocol.js';
 import { createAvatar } from '../player/avatar.js';
+import { ITEMS } from '../core/items.js';
 
 /** Module-level loop guard: true while a relayed event is being applied locally (listeners must not re-send). */
 let applying = false;
@@ -49,6 +54,18 @@ export function normalizeServer(s) {
   return s.replace(/\/+$/, '');
 }
 const r2 = (v) => Math.round(v * 100) / 100;
+/** { id: int ≥ 0 } copy (at most 64 keys). */
+function intMap(o) {
+  const out = {};
+  if (!o || typeof o !== 'object') return out;
+  let k = 0;
+  for (const id in o) {
+    const n = Math.floor(+o[id] || 0);
+    if (n > 0 && n <= 9999 && id.length <= 32) out[id] = n;
+    if (++k >= 64) break;
+  }
+  return out;
+}
 const vec = (p) => (p && typeof p.x === 'number' ? [r2(p.x), r2(p.y || 0), r2(p.z)] : Array.isArray(p) ? p.slice(0, 3) : null);
 
 export function create(ctx) {
@@ -75,6 +92,7 @@ export function create(ctx) {
     join,
     leave,
     send,
+    relay,
     on,
     chat,
     init,
@@ -543,7 +561,29 @@ export function create(ctx) {
       case 'food:cooked':
         return { from: p.from, to: p.to, n: p.n };
       case 'raft:stage':
-        return typeof p.stageIndex === 'number' ? { stageIndex: p.stageIndex } : null;
+        if (typeof p.stageIndex !== 'number') return null;
+        return p.used && Object.keys(p.used).length ? { stageIndex: p.stageIndex, used: intMap(p.used) } : { stageIndex: p.stageIndex };
+      case 'item:dropped': {
+        const x = p.x ?? p.position?.x, z = p.z ?? p.position?.z;
+        if (typeof p.dropId !== 'string' || typeof p.id !== 'string' || !Number.isFinite(x) || !Number.isFinite(z)) return null;
+        return { dropId: p.dropId, id: p.id, n: Math.max(1, Math.floor(p.n || 1)), x: r2(x), z: r2(z) };
+      }
+      case 'drop:picked':
+        return typeof p.dropId === 'string' ? { dropId: p.dropId } : null;
+      case 'raft:deposit':
+        return typeof p.id === 'string' && p.n > 0 ? { id: p.id, n: Math.floor(p.n), by: typeof p.by === 'string' ? p.by.slice(0, 16) : '' } : null;
+      case 'raft:sync':
+        return api.isHost && typeof p.stageIndex === 'number' ? { stageIndex: p.stageIndex, stock: intMap(p.stock) } : null;
+      case 'vehicle:placed':
+        return typeof p.vid === 'string' && Number.isFinite(p.x) && Number.isFinite(p.z)
+          ? { vid: p.vid, type: p.type || 'paddle_raft', x: r2(p.x), z: r2(p.z), heading: Math.round((p.heading || 0) * 1000) / 1000 }
+          : null;
+      case 'vehicle:pose':
+        return typeof p.vid === 'string' && Number.isFinite(p.x) && Number.isFinite(p.z)
+          ? { vid: p.vid, x: p.x, z: p.z, heading: p.heading || 0, roll: p.roll || 0, cap: p.cap ? 1 : 0 }
+          : null;
+      case 'vehicle:seat':
+        return typeof p.vid === 'string' && (p.seat === 0 || p.seat === 1) ? { vid: p.vid, seat: p.seat, playerId: p.playerId ?? null } : null;
       case 'tree:fell':
         return { position: vec(p.position), type: p.type };
       case 'flare:fired':
@@ -561,12 +601,18 @@ export function create(ctx) {
   function sendEvent(name, payload) {
     return send(MSG.EVENT, { name, payload });
   }
+  /** v5: send one shared event straight to the room (bypasses the bus; still packed + validated). */
+  function relay(name, p) {
+    if (!api.connected || !SHARED_EVENTS.includes(name)) return false;
+    const payload = pack(name, p);
+    return payload ? sendEvent(name, payload) : false;
+  }
   function wireRelay() {
     for (const name of SHARED_EVENTS) {
       if (name === 'time:set') continue;
       ev.on(name, (p) => {
         if (applying || !api.connected || p?.remote) return;
-        const ok = ctx.state === 'playing' || (ctx.state === 'rescued' && WIN_EVENTS.includes(name));
+        const ok = ctx.state === 'playing' || (ctx.state === 'rescued' && WIN_EVENTS.includes(name)) || PAUSED_OK_EVENTS.includes(name);
         if (!ok) return;
         const payload = pack(name, p);
         if (payload) sendEvent(name, payload);
@@ -607,7 +653,28 @@ export function create(ctx) {
           ev.emit('food:cooked', { from: p.from, to: p.to, n: p.n, remote: true, from_player: from });
           break;
         case 'raft:stage':
-          if (ctx.raft?.applyStage?.(p.stageIndex)) toast(`${who} finished a step of the boat.`, { icon: '🔨', key: 'net-raft' });
+          if (ctx.raft?.applyStage?.(p.stageIndex, p.used)) toast(`${who} finished a step of the boat.`, { icon: '🔨', key: 'net-raft' });
+          break;
+        case 'item:dropped':
+          if (typeof p.dropId === 'string' && typeof p.id === 'string' && Number.isFinite(p.x) && Number.isFinite(p.z)) {
+            ctx.resources?.spawnDrop?.(p.id, Math.max(1, Math.floor(p.n || 1)), p.x, p.z, p.dropId);
+          }
+          break;
+        case 'drop:picked':
+          if (typeof p.dropId === 'string') ctx.resources?.removeDrop?.(p.dropId);
+          break;
+        case 'raft:deposit':
+          if (ctx.raft?.applyDeposit?.(p.id, p.n)) {
+            toast(`${p.by || who} added ${p.n} ${ITEMS[p.id]?.name || p.id} to the boat stockpile.`, { icon: '📦', key: 'net-deposit' });
+          }
+          break;
+        case 'raft:sync':
+          if (!api.isHost && from === api.hostId) ctx.raft?.applySync?.(p.stageIndex, p.stock);
+          break;
+        case 'vehicle:placed':
+        case 'vehicle:pose':
+        case 'vehicle:seat':
+          ctx.vehicles?.applyRemote?.(name, p, from);
           break;
         case 'tree:fell':
           ev.emit('tree:fell', { position: toV3(p.position), type: p.type, remote: true });
@@ -802,7 +869,11 @@ export function create(ctx) {
       refreshPanel();
     }
     if (!api.connected) return;
-    for (const p of players.values()) p.avatar?.update(dt);
+    for (const p of players.values()) {
+      p.avatar?.update(dt);
+      // v5: a player sitting on a raft is drawn at their seat on OUR copy of it (theirs lags behind ours)
+      if (p.avatar?.object && p.state?.aboard) ctx.vehicles?.seatFeet?.(p.id, p.avatar.object.position);
+    }
     pingAcc += dt;
     if (pingAcc >= PING_SEC) {
       pingAcc = 0;

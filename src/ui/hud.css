@@ -1064,6 +1064,134 @@ body:not(.letterbox) #hud.hud-veh .hud-subtitle {
   color: var(--ink);
 }
 
+/* v5 (V5-A) slots: backpack grid (6 × 4) + hotbar row (9) with drag & drop, inside the panel only */
+.inv-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+.inv-hotrow {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 4px;
+}
+.inv-slot {
+  position: relative;
+  aspect-ratio: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  border-radius: 10px;
+  background: rgba(255, 238, 205, 0.06);
+  border: 1px solid rgba(232, 208, 160, 0.12);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.inv-slot.hot {
+  font-size: 19px;
+  border-radius: 8px;
+  background: rgba(255, 238, 205, 0.09);
+}
+.inv-slot.hot.cur {
+  border-color: rgba(220, 170, 94, 0.7);
+}
+.inv-slot.empty {
+  cursor: default;
+  background: rgba(0, 0, 0, 0.14);
+}
+.inv-slot:hover {
+  border-color: var(--accent);
+  background: rgba(242, 179, 91, 0.14);
+}
+.inv-slot.picked {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.inv-slot.dragging .inv-icon {
+  opacity: 0.35;
+}
+.inv-slot .slot-n {
+  font-size: 11px;
+}
+.inv-key {
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  font-size: 9px;
+  color: var(--ink-dim);
+}
+.inv-cap {
+  float: right;
+  font-weight: 400;
+  color: var(--ink-dim);
+}
+.inv-acts {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.inv-acts .btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.inv-ghost,
+.inv-tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 35;
+}
+.inv-ghost {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.5));
+}
+.inv-ghost.split::after {
+  content: '½';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.inv-tip {
+  display: none;
+  max-width: 260px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  border-radius: 8px;
+  background: var(--hud-glass-strong);
+  border: 1px solid var(--hud-line);
+  box-shadow: var(--hud-drop);
+  color: var(--ink-dim);
+}
+.inv-tip.on {
+  display: block;
+}
+.inv-tip b {
+  display: block;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+.inv-tip .tt-fx {
+  margin-top: 3px;
+  color: var(--ink);
+}
+.inv-tip .tt-n {
+  margin-top: 3px;
+  color: var(--accent);
+}
+
 /* journal */
 .tip-grid {
   display: grid;

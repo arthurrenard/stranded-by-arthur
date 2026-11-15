@@ -1,18 +1,29 @@
-// Inventory (Builder E): item counts, a 9-slot hotbar auto-filled with owned items, item use
-// (eat / drink / medicine / torch / flare / canteen) and the drinking interaction provider.
+// Inventory (Builder E, v5 slots by V5-A): item stacks in 9 hotbar slots + a 24-slot backpack grid, item use
+// (eat / drink / medicine / torch / flare / canteen), dropping items and the drinking interaction provider.
 //
-// Hotbar rules (stable): an item keeps its slot while you own it. A newly owned item takes the first
-// free slot; if the bar is full, a usable item (food, drink, medicine, torch, flare, canteen) evicts the
-// right-most raw material (which stays in the backpack, visible in the crafting panel). When a slot
-// empties it is refilled from the backpack, usable items first.
+// v5 slot model (SPEC §13): one flat array of HOT + PACK slots (0-8 = hotbar, 9-32 = backpack), each
+// {id, n} or null, n ≤ stackLimit(id). The old API is unchanged: count/has sum every stack, list() is one
+// aggregated {id, n} per item in acquisition order, `hotbar` is a persistent array of 9 item ids (or null).
+// add() fills existing stacks, then the hotbar's empty slots, then the backpack; if the bar is full, a usable
+// item that is not on it yet evicts the right-most raw material into the backpack. When everything is full the rest spills as a world drop at the
+// player's feet (unless { spill: false }). remove() takes from backpack stacks first so the hotbar stays put;
+// a hotbar slot emptied by remove() is refilled from the backpack, usable items first. Moves the player makes
+// (drag & drop in the panel) are never auto-rearranged.
 //
-// Input owned here: Digit1-9 + wheel (select), F / right-click (use). T (torch) is owned by structures.
+// Input owned here: Digit1-9 + wheel (select), F / right-click (use), Q / Shift+Q (drop the selected stack /
+// one item). T (torch) is owned by structures.
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { ITEMS, isConsumable } from '../core/items.js';
 import { effectSummary } from '../ui/hud-data.js';
 
 export const SLOTS = 9;
+export const HOT = SLOTS;
+export const PACK = 24;
+/** Single-stack items (one per slot). Everything else stacks to STACK. */
+const SINGLE = new Set(['shovel', 'pickaxe', 'paddle', 'fishing_rod', 'boat_key', 'diving_mask']);
+export const STACK = 20;
+export const stackLimit = (id) => (SINGLE.has(id) ? 1 : STACK);
 /** v2: what F does (explains) for the boat-repair tools. Parts get a generic "bring it to the Boatyard". */
 export const TOOL_TEXT = {
   shovel: 'Look for disturbed sand mounds and press E to dig.',
@@ -20,15 +31,183 @@ export const TOOL_TEXT = {
   diving_mask: 'Keep it in your pack: hold X while swimming to dive, and your breath lasts twice as long.',
   fishing_rod: 'Look at the water and press R to cast.',
 };
+/** v5: drop key (Q is free in CONFIG.keys; Shift+Q drops one). */
+const DROP_KEYS = CONFIG.keys.drop || ['KeyQ'];
 /** v4: raw catches are edible but should be cooked (campfire, R). */
 const RAW_CATCH = new Set(['raw_fish', 'big_fish', 'crab']);
 // v2 tools count as usable so they get a hotbar slot (F explains them, see TOOL_TEXT)
 export const isUsable = (id) => !!id && (isConsumable(id) || id === 'torch' || id === 'flare' || id === 'bottle_empty' || id in TOOL_TEXT);
 
+// ── Pure slot helpers (no ctx, unit-tested in tests/inventory-ui.test.mjs) ────────────────────────────
+// S is a flat array: S[0..hot-1] hotbar, S[hot..] backpack; each entry {id, n} or null.
+export function newSlots(hot = HOT, pack = PACK) {
+  return new Array(hot + pack).fill(null);
+}
+export function slotTotal(S, id) {
+  let t = 0;
+  for (let i = 0; i < S.length; i++) if (S[i] && S[i].id === id) t += S[i].n;
+  return t;
+}
+/** Free room for `id` across every slot (existing stacks + empty slots). */
+export function roomFor(S, id, limit = stackLimit) {
+  const L = limit(id);
+  let r = 0;
+  for (let i = 0; i < S.length; i++) r += S[i] ? (S[i].id === id ? Math.max(0, L - S[i].n) : 0) : L;
+  return r;
+}
+function firstEmpty(S, a, b) {
+  for (let i = a; i < b; i++) if (!S[i]) return i;
+  return -1;
+}
+/**
+ * addTo(S, id, n, { hot, usable, limit }) -> number stored. Order (SPEC §13): existing stacks (hotbar first),
+ * then the hotbar's empty slots, then the backpack. A usable item that is not on a full hotbar yet evicts the
+ * right-most non-usable hotbar stack into the backpack and takes its slot.
+ */
+export function addTo(S, id, n, opts = {}) {
+  const hot = opts.hot ?? HOT;
+  const usable = opts.usable ?? isUsable;
+  const L = (opts.limit ?? stackLimit)(id);
+  n = Math.floor(n);
+  if (!(n > 0)) return 0;
+  let left = n;
+  for (let i = 0; i < S.length && left > 0; i++) {
+    const s = S[i];
+    if (s && s.id === id && s.n < L) {
+      const k = Math.min(L - s.n, left);
+      s.n += k;
+      left -= k;
+    }
+  }
+  let inHot = false;
+  for (let i = 0; i < hot; i++) if (S[i] && S[i].id === id) inHot = true;
+  while (left > 0) {
+    let i = firstEmpty(S, 0, hot);
+    if (i < 0 && !inHot) {
+      if (usable(id)) {
+        // evict the right-most non-usable hotbar stack into the backpack
+        const free = firstEmpty(S, hot, S.length);
+        if (free >= 0) {
+          for (let k = hot - 1; k >= 0; k--) {
+            if (S[k] && !usable(S[k].id)) {
+              S[free] = S[k];
+              S[k] = null;
+              i = k;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (i < 0) i = firstEmpty(S, hot, S.length);
+    if (i < 0) break;
+    const k = Math.min(L, left);
+    S[i] = { id, n: k };
+    left -= k;
+    if (i < hot) inHot = true;
+  }
+  return n - left;
+}
+/** removeFrom(S, id, n, hot) -> array of hotbar indices that became empty, or null if there were not enough. */
+export function removeFrom(S, id, n, hot = HOT) {
+  n = Math.floor(n);
+  if (!(n > 0)) return [];
+  if (slotTotal(S, id) < n) return null;
+  let left = n;
+  const emptied = [];
+  // backpack from the end first, then the hotbar from the right
+  for (let i = S.length - 1; i >= hot && left > 0; i--) {
+    const s = S[i];
+    if (!s || s.id !== id) continue;
+    const k = Math.min(s.n, left);
+    s.n -= k;
+    left -= k;
+    if (s.n <= 0) S[i] = null;
+  }
+  for (let i = hot - 1; i >= 0 && left > 0; i--) {
+    const s = S[i];
+    if (!s || s.id !== id) continue;
+    const k = Math.min(s.n, left);
+    s.n -= k;
+    left -= k;
+    if (s.n <= 0) {
+      S[i] = null;
+      emptied.push(i);
+    }
+  }
+  return emptied;
+}
+/**
+ * moveSlot(S, from, to, { split, limit }) -> true if anything moved. Empty target: move (split: half,
+ * rounded up). Same item: merge up to the stack limit. Different item: swap (not when splitting).
+ */
+export function moveSlot(S, from, to, opts = {}) {
+  if (from === to || from < 0 || to < 0 || from >= S.length || to >= S.length) return false;
+  const a = S[from];
+  if (!a) return false;
+  const b = S[to];
+  const amount = opts.split ? Math.ceil(a.n / 2) : a.n;
+  if (!b) {
+    if (amount >= a.n) {
+      S[to] = a;
+      S[from] = null;
+    } else {
+      S[to] = { id: a.id, n: amount };
+      a.n -= amount;
+    }
+    return true;
+  }
+  if (b.id === a.id) {
+    const L = (opts.limit ?? stackLimit)(a.id);
+    const k = Math.min(Math.max(0, L - b.n), amount);
+    if (k <= 0) return false;
+    b.n += k;
+    a.n -= k;
+    if (a.n <= 0) S[from] = null;
+    return true;
+  }
+  if (opts.split) return false;
+  S[to] = a;
+  S[from] = b;
+  return true;
+}
+/** takeFrom(S, i, n?) -> {id, n} taken out of slot i (whole stack by default), or null. */
+export function takeFrom(S, i, n) {
+  const s = S[i];
+  if (!s) return null;
+  const k = Math.max(1, Math.min(s.n, Math.floor(n ?? s.n)));
+  s.n -= k;
+  if (s.n <= 0) S[i] = null;
+  return { id: s.id, n: k };
+}
+/** refillHot(S, i, hot, usable): put a backpack stack into the empty hotbar slot i (usable items first,
+ *  only items that have no hotbar slot yet). Returns true if it moved one. */
+export function refillHot(S, i, hot = HOT, usable = isUsable) {
+  if (S[i]) return false;
+  let best = -1;
+  for (let k = hot; k < S.length; k++) {
+    const s = S[k];
+    if (!s) continue;
+    let shown = false;
+    for (let h = 0; h < hot; h++) if (S[h] && S[h].id === s.id) shown = true;
+    if (shown) continue;
+    if (usable(s.id)) {
+      best = k;
+      break;
+    }
+    if (best < 0) best = k;
+  }
+  if (best < 0) return false;
+  S[i] = S[best];
+  S[best] = null;
+  return true;
+}
+
 export function create(ctx) {
+  const S = newSlots(); // the slots (hotbar + backpack)
+  const hotIds = new Array(SLOTS).fill(null); // persistent: rewritten in place by sync()
   const counts = new Map();
-  const slots = new Array(SLOTS).fill(null);
-  const order = []; // every id ever owned, in acquisition order (backpack order)
+  const order = []; // every id ever owned, in acquisition order (list() order)
   let selectedIndex = 0;
   let version = 0;
   let playTime = 0;
@@ -37,45 +216,32 @@ export function create(ctx) {
   const delayed = []; // [{ at, fn }] messages that fire after a delay of play time
   const _cam = new THREE.Vector3();
   const _dir = new THREE.Vector3();
+  const _drop = { x: 0, z: 0 };
 
   const ui = () => ctx.ui;
   const toast = (text, opts) => ctx.ui?.toast?.(text, opts);
   const play = (name, opts) => ctx.audio?.play?.(name, opts);
 
   // ── Core inventory ─────────────────────────────────────────────────────
+  function sync() {
+    for (let i = 0; i < SLOTS; i++) hotIds[i] = S[i] ? S[i].id : null;
+    counts.clear();
+    for (let i = 0; i < S.length; i++) {
+      const s = S[i];
+      if (s) counts.set(s.id, (counts.get(s.id) || 0) + s.n);
+    }
+    version++;
+  }
   function count(id) {
     return counts.get(id) || 0;
   }
   function has(id, n = 1) {
     return count(id) >= n;
   }
-  function placeInHotbar(id) {
-    if (slots.includes(id)) return;
-    let i = slots.indexOf(null);
-    if (i < 0 && isUsable(id)) {
-      for (let k = SLOTS - 1; k >= 0; k--) {
-        if (!isUsable(slots[k])) {
-          i = k;
-          break;
-        }
-      }
-    }
-    if (i >= 0) slots[i] = id;
-  }
-  function refillSlot(i) {
-    let best = null;
-    for (const id of order) {
-      if (!(counts.get(id) > 0) || slots.includes(id)) continue;
-      if (isUsable(id)) {
-        best = id;
-        break;
-      }
-      if (!best) best = id;
-    }
-    slots[i] = best;
-  }
 
-  /** add(id, n = 1, { silent }) -> number added. silent: no pickup feed line (e.g. returned canteens). */
+  /** add(id, n = 1, { silent, spill }) -> number handled. silent: no pickup feed line (e.g. returned canteens).
+   *  spill (default true): what does not fit is dropped at the player's feet and counts as handled (returns n);
+   *  with spill: false (or no world to drop into) it returns only the number stored in the pack. */
   function add(id, n = 1, opts = {}) {
     n = Math.floor(n);
     if (!ITEMS[id]) {
@@ -84,31 +250,32 @@ export function create(ctx) {
     }
     if (!(n > 0)) return 0;
     const before = count(id);
-    counts.set(id, before + n);
-    if (!order.includes(id)) order.push(id);
-    if (before === 0) placeInHotbar(id);
-    version++;
-    ctx.events.emit('item:added', { id, n, total: before + n, silent: !!opts.silent });
-    return n;
+    const stored = addTo(S, id, n);
+    if (stored > 0 && !order.includes(id)) order.push(id);
+    sync();
+    if (stored > 0) ctx.events.emit('item:added', { id, n: stored, total: before + stored, silent: !!opts.silent });
+    const rest = n - stored;
+    if (rest > 0 && opts.spill !== false) {
+      const p = ctx.player?.position;
+      if (p && ctx.resources?.spawnDrop) {
+        ctx.resources.spawnDrop(id, rest, p.x, p.z);
+        toast(`Your pack is full: dropped ${rest} ${ITEMS[id].name} at your feet.`, { icon: '🎒', kind: 'warn', key: 'packfull', duration: 3 });
+        // callers read the return value as "taken from the source" (harvests, shelves, catches): the spilled rest
+        // is in the world now, so count it as handled (no duplicates); pickups pass spill: false for the real count
+        return n;
+      } else toast(`Your pack is full: no room for ${ITEMS[id].name}.`, { icon: '🎒', kind: 'warn', key: 'packfull', duration: 3 });
+    }
+    return stored;
   }
   /** remove(id, n = 1) -> true if there were enough (nothing is removed otherwise). */
   function remove(id, n = 1) {
     n = Math.floor(n);
     if (!(n > 0)) return true;
-    const have = count(id);
-    if (have < n) return false;
-    const left = have - n;
-    if (left > 0) counts.set(id, left);
-    else {
-      counts.delete(id);
-      const i = slots.indexOf(id);
-      if (i >= 0) {
-        slots[i] = null;
-        refillSlot(i);
-      }
-    }
-    version++;
-    ctx.events.emit('item:removed', { id, n, total: left });
+    const emptied = removeFrom(S, id, n);
+    if (!emptied) return false;
+    for (const i of emptied) refillHot(S, i);
+    sync();
+    ctx.events.emit('item:removed', { id, n, total: count(id) });
     return true;
   }
   function list() {
@@ -119,6 +286,59 @@ export function create(ctx) {
     }
     return out;
   }
+  /** Move/merge/swap/split between two slot indices (0-8 hotbar, 9-32 backpack). */
+  function move(from, to, opts = {}) {
+    const ok = moveSlot(S, from, to, { split: !!opts.split });
+    if (ok) {
+      sync();
+      play('ui_click', { volume: 0.2 });
+      ctx.events.emit('inventory:changed', { from, to });
+    }
+    return ok;
+  }
+
+  /** Where a drop lands: ~1.2 m in front of the player on the ground, or at the feet when that is deep water. */
+  function dropPoint() {
+    const p = ctx.player?.position;
+    if (!p) return null;
+    let fx = 0, fz = 0;
+    if (ctx.camera?.getWorldDirection) {
+      ctx.camera.getWorldDirection(_dir);
+      const hl = Math.hypot(_dir.x, _dir.z);
+      if (hl > 1e-4) {
+        fx = _dir.x / hl;
+        fz = _dir.z / hl;
+      }
+    }
+    _drop.x = p.x + fx * 1.2;
+    _drop.z = p.z + fz * 1.2;
+    const w = ctx.world?.waterAt?.(_drop.x, _drop.z);
+    if ((w && w.depth > 0.5) || ctx.player?.inWater || ctx.player?.swimming) {
+      _drop.x = p.x;
+      _drop.z = p.z;
+    }
+    return _drop;
+  }
+  /** dropSlot(i, n?) -> number dropped: n items (whole stack by default) from slot i become a world pickup. */
+  function dropSlot(i, n) {
+    const s = S[i];
+    if (!s || !ctx.resources?.spawnDrop) return 0;
+    const at = dropPoint();
+    if (!at) return 0;
+    const t = takeFrom(S, i, n);
+    if (!t) return 0;
+    sync();
+    ctx.events.emit('item:removed', { id: t.id, n: t.n, total: count(t.id), dropped: true });
+    ctx.resources.spawnDrop(t.id, t.n, at.x, at.z);
+    play('ui_click', { volume: 0.3 });
+    const it = ITEMS[t.id];
+    toast(`Dropped ${t.n > 1 ? t.n + ' ' : ''}${it?.name || t.id}`, { icon: it?.icon, key: 'drop', duration: 1.6 });
+    return t.n;
+  }
+  function dropSelected(one = false) {
+    if (!S[selectedIndex]) return 0;
+    return dropSlot(selectedIndex, one ? 1 : undefined);
+  }
   function select(i) {
     i = Math.max(0, Math.min(SLOTS - 1, Math.floor(i)));
     if (i !== selectedIndex) {
@@ -126,14 +346,14 @@ export function create(ctx) {
       version++;
       play('ui_click', { volume: 0.25 });
     }
-    return slots[i];
+    return hotIds[i];
   }
   function selectStep(dir) {
-    const filled = slots.some(Boolean);
+    const filled = hotIds.some(Boolean);
     let i = selectedIndex;
     for (let k = 0; k < SLOTS; k++) {
       i = (i + dir + SLOTS) % SLOTS;
-      if (!filled || slots[i]) break;
+      if (!filled || hotIds[i]) break;
     }
     select(i);
   }
@@ -285,7 +505,7 @@ export function create(ctx) {
   }
 
   /** Use an item (default: the selected one). Returns true if something happened. */
-  function useItem(id = slots[selectedIndex]) {
+  function useItem(id = hotIds[selectedIndex]) {
     if (!id || !has(id)) return false;
     if (ctx.state !== 'playing' || ctx.flags.cinematic) return false;
     const it = ITEMS[id];
@@ -348,6 +568,7 @@ export function create(ctx) {
     const wheel = input.wheel;
     if (wheel) selectStep(wheel > 0 ? 1 : -1);
     if (input.wasPressed('useItem')) useItem();
+    if (input.wasPressed(DROP_KEYS)) dropSelected(!!input.isDown?.('sprint'));
   }
 
   const api = {
@@ -364,15 +585,27 @@ export function create(ctx) {
     useSelected: () => useItem(),
     findWater,
     fillCanteen,
-    /** Hotbar slots (array of 9 item ids or null). Read-only for other modules. */
+    move,
+    dropSlot,
+    dropSelected,
+    stackLimit,
+    HOT,
+    PACK,
+    /** Hotbar slots (persistent array of 9 item ids or null). Read-only for other modules. */
     get hotbar() {
-      return slots;
+      return hotIds;
     },
+    /** v5: every slot (0-8 hotbar, 9-32 backpack), each {id, n} or null. Read-only: use move/dropSlot. */
+    get slots() {
+      return S;
+    },
+    /** v5: stack size in slot i (0 if empty). */
+    slotN: (i) => S[i]?.n || 0,
     get selectedIndex() {
       return selectedIndex;
     },
     get selected() {
-      return slots[selectedIndex] || null;
+      return hotIds[selectedIndex] || null;
     },
     /** Bumped on every change (HUD re-renders when it changes). */
     get version() {

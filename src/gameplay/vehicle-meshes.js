@@ -52,8 +52,8 @@ function instanced(geo, mat, list) {
 
 /**
  * The paddle raft: six lashed logs (bow toward local -Z), two cross beams, a small plank deck and rope
- * lashings. Origin at the waterline. Returns { group, body, seat } where `body` is what flips when it
- * capsizes and `seat` is an Object3D at eye height for the player (controller.setSeat).
+ * lashings. Origin at the waterline. Returns { group, body, seat, seat2 } where `body` is what flips when it
+ * capsizes and `seat` is an Object3D at eye height for the player (controller.setSeat); `seat2` is the co-op passenger's seat.
  */
 export function makePaddleRaft(rand = Math.random) {
   const { mats, geo } = res();
@@ -81,7 +81,11 @@ export function makePaddleRaft(rand = Math.random) {
   const seat = new THREE.Object3D();
   seat.position.set(0, RAFT.deck + RAFT.seatEye, 0.45);
   body.add(seat);
-  return { group, body, seat };
+  // v5: the passenger's seat, toward the bow (co-op: seat 1 rides along)
+  const seat2 = new THREE.Object3D();
+  seat2.position.set(0, RAFT.deck + RAFT.seatEye, -0.8);
+  body.add(seat2);
+  return { group, body, seat, seat2 };
 }
 
 /** The paddle you hold while aboard the raft (child of the camera; animate rotation for strokes). */

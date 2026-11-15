@@ -163,6 +163,35 @@ await step('events: time:set only from the host', async () => {
   assert.equal(t.payload.hoursTotal, 40);
 });
 
+await step('v5 co-op events: relayed with `from`, malformed payloads dropped, raft:sync host-only', async () => {
+  const relayed = async (name, payload) => {
+    sendTo(B, MSG.EVENT, { name, payload });
+    const e = await waitFor(A, (m) => m.t === MSG.EVENT && m.name === name, name);
+    assert.equal(e.from, wb.id);
+    assert.deepEqual(e.payload, payload);
+  };
+  await relayed('item:dropped', { dropId: 'b1:1', id: 'wood', n: 3, x: 10.5, z: -4 });
+  await relayed('drop:picked', { dropId: 'b1:1' });
+  await relayed('raft:deposit', { id: 'rope', n: 2, by: 'Bob' });
+  await relayed('raft:stage', { stageIndex: 1, used: { wood: 4 } });
+  await relayed('vehicle:placed', { vid: 'b1:raft', type: 'paddle_raft', x: 1, z: 2, heading: 0.5 });
+  await relayed('vehicle:pose', { vid: 'b1:raft', x: 1.2, z: 2.1, heading: 0.6, roll: 0.01, cap: 0 });
+  await relayed('vehicle:seat', { vid: 'b1:raft', seat: 1, playerId: wb.id });
+  // malformed → dropped
+  sendTo(B, MSG.EVENT, { name: 'vehicle:pose', payload: { vid: 'b1:raft', x: 1e9, z: 0, heading: 0 } });
+  sendTo(B, MSG.EVENT, { name: 'vehicle:placed', payload: { vid: 'b1:boat', type: 'battleship', x: 0, z: 0, heading: 0 } });
+  sendTo(B, MSG.EVENT, { name: 'item:dropped', payload: { dropId: 'b1:2', id: 'wood', n: -5, x: 0, z: 0 } });
+  sendTo(B, MSG.EVENT, { name: 'raft:deposit', payload: { id: 'rope', n: 1.5 } });
+  await none(A, (m) => m.t === MSG.EVENT && ['vehicle:pose', 'vehicle:placed', 'item:dropped', 'raft:deposit'].includes(m.name), 'malformed co-op event');
+  // raft:sync only from the host
+  sendTo(B, MSG.EVENT, { name: 'raft:sync', payload: { stageIndex: 3, stock: { wood: 1 } } });
+  await none(A, (m) => m.t === MSG.EVENT && m.name === 'raft:sync', 'raft:sync from a client');
+  sendTo(A, MSG.EVENT, { name: 'raft:sync', payload: { stageIndex: 2, stock: { wood: 5, rope: 1 } } });
+  const s = await waitFor(B, (m) => m.t === MSG.EVENT && m.name === 'raft:sync', 'raft:sync from the host');
+  assert.deepEqual(s.payload, { stageIndex: 2, stock: { wood: 5, rope: 1 } });
+  await none(B, (m) => m.t === MSG.EVENT && m.name !== 'raft:sync', 'stray echo', 50);
+});
+
 await step('chat: sanitized, capped at 200 chars, not echoed', async () => {
   const raw = '<b>hi</b>\u0007   there​';
   sendTo(A, MSG.CHAT, { text: raw });

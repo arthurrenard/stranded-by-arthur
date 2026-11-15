@@ -675,6 +675,17 @@ export function create(ctx) {
       refreshObjective();
     });
     ev.on('item:removed', refreshObjective);
+    // keep an open backpack panel in step with every inventory change (pickups, drops, moves, crafting)
+    let invRefreshQueued = false;
+    const refreshInv = () => {
+      if (invRefreshQueued || !api.menuOpen) return;
+      invRefreshQueued = true;
+      setTimeout(() => {
+        invRefreshQueued = false;
+        if (api.menuOpen && panels.current === 'craft') panels.refresh?.();
+      }, 0);
+    };
+    for (const n of ['item:added', 'item:removed', 'inventory:changed']) ev.on(n, refreshInv);
     // v3: vehicles + Tempest Isle
     ev.on('vehicle:placed', () => panels.log('🛶', 'Built a paddle raft.'));
     ev.on('vehicle:capsized', (p) => panels.log('🌊', p?.type === 'boat' ? 'A storm flipped your boat at Tempest Isle.' : 'A storm capsized your raft.'));
@@ -699,6 +710,8 @@ export function create(ctx) {
     if (id === 'diving_mask') hint('mask', 'Diving Mask: keep it in your pack and your breath lasts much longer underwater. Hold X while swimming to dive.');
     if (ITEMS[id]?.category === 'part') hint('part', 'A boat part! Carry parts to the Boatyard on the beach where you washed ashore and press E there to build the next stage.');
     if (id === 'flare') hint('flare', 'Save the flare until the search party is close, then select it and press F.');
+    if (inv?.hotbar?.every?.(Boolean))
+      hint('pack', 'Your hotbar is full: new items go to the backpack. Press Tab and drag items between the backpack and the hotbar. Q drops the selected stack (Shift+Q one).');
     if (ITEMS[id]?.category === 'food' && id !== 'toadstool') hint('eat', 'Select food in the hotbar (1-9 or the wheel) and press F or right-click to eat.');
   }
 
@@ -1287,7 +1300,7 @@ export function create(ctx) {
     for (let i = 0; i < 9; i++) {
       const S = E.slots[i];
       const id = inv.hotbar[i] || null;
-      const n = id ? inv.count(id) : 0;
+      const n = id ? (inv.slotN ? inv.slotN(i) : inv.count(id)) : 0; // v5: this slot's own stack
       if (S.id !== id) {
         S.id = id;
         S.icon.textContent = id ? ITEMS[id]?.icon || '❔' : '';

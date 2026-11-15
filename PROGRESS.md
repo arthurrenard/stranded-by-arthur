@@ -93,4 +93,5 @@ Requests: drop items; move items between backpack and hotbar; two people on one 
 Also done before this: title screen solo/create/join; Fly server deployed; lobbies survive server restarts (resume); the user added a
 card to Fly (5-min trial cutoff should be gone: verifying with a 6.7-min connection test).
 - [x] SPEC §13 contract + ownership
-- [ ] V5 builders (2 agents): A inventory UI, B co-op sync. Then a two-tab test, a server redeploy (SHARED_EVENTS changed), push.
+- [x] V5 done: slots/drag/drop/Q + co-op (drops, stockpile, 2-seat raft). Server redeployed. Two-tab test over Fly passed (drop seen +
+  picked, stock synced, passenger rides the driver's raft). Card on Fly confirmed (400 s connection held).

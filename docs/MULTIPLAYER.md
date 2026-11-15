@@ -165,3 +165,9 @@ in the low single-digit GB per month. Both options are far below a $35/month bud
 (tens of seconds), and a sleeping server drops the room.
 
 Sources: https://fly.io/pricing, https://fly.io/pricing-update/, https://www.activepieces.com/blog/railway-pricing-2026-plans-usage-rates-and-costs.md
+
+## v5 co-op events (2026-11-22)
+Relayed (SHARED_EVENTS, client + server): `item:dropped` / `drop:picked` (world pickups by dropId), `raft:deposit` (the Boatyard's
+shared stock), `raft:sync` (host → joiners: stage + stock), `vehicle:placed` / `vehicle:pose` (driver, ~10 Hz) / `vehicle:seat`
+(2-seat paddle raft). Known gaps: drops already on the ground aren't sent to late joiners; two players grabbing the same drop at the
+same instant can both get it; a capsized raft can only be righted by the player simulating it.
