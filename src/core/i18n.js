@@ -19,6 +19,7 @@ export const COMPASS = {
 
 export const DICT = {
   en: {
+    clickToContinue: 'Click to continue',
     'clock.day': 'Day {n}',
     'diff.easy': 'Easy',
     'diff.medium': 'Medium',
@@ -68,6 +69,7 @@ export const DICT = {
     'key.rclick': 'Right-click',
   },
   fr: {
+    clickToContinue: 'Cliquez pour continuer',
     'clock.day': 'Jour {n}',
     'diff.easy': 'Facile',
     'diff.medium': 'Moyen',

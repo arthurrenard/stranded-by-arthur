@@ -91,7 +91,10 @@ export function createNetUI(ctx, net) {
     input.blur();
     ctx.flags.typing = false;
     ownMenu = false;
-    if (viaEnter && ctx.state === 'playing') ctx.input?.lock?.();
+    if (ctx.state === 'playing') {
+      if (viaEnter) ctx.input?.lock?.();
+      else ctx.flags.awaitClick = performance.now(); // closed with Escape: resume on the next click, no pause page
+    }
   }
 
   // ── Player list ────────────────────────────────────────────────────────

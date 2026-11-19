@@ -467,7 +467,11 @@ export function create(ctx) {
     if (!panels || !api.menuOpen) return;
     panels.hide();
     api.menuOpen = false;
-    if (ctx.state === 'playing' && !viaEscape) ctx.input?.lock?.();
+    if (ctx.state === 'playing') {
+      // Escape can't re-capture the mouse (browsers reserve it), so instead of the pause page we wait for one click
+      if (viaEscape) ctx.flags.awaitClick = performance.now(); // timestamp: the same Escape must not also open the pause page
+      else ctx.input?.lock?.();
+    }
     ctx.audio?.play?.('ui_click');
   }
 

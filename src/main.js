@@ -98,6 +98,7 @@ const ctx = {
     nearFire: 0, // D: 0..1 warmth from the nearest heat source
     sleeping: false,
     typing: false, // multiplayer chat input open: the pointer is free but the world keeps running
+    awaitClick: false, // a menu was closed with Escape: keep playing, re-capture the mouse on the next click (no pause page)
     godMode: false,
     gravityScale: 1, // F easter egg (moon gravity) multiplies gravity
     speedScale: 1,
@@ -398,7 +399,53 @@ function wireI18n() {
   sync();
 }
 
+// ── After closing a menu with Escape: keep playing; the next click anywhere re-captures the mouse ──
+function wireAwaitClick() {
+  const hint = document.createElement('div');
+  hint.id = 'click-resume';
+  hint.setAttribute('translate', 'no');
+  hint.textContent = 'Click to continue';
+  hint.style.cssText =
+    'position:fixed;left:50%;top:58%;transform:translateX(-50%);z-index:30;padding:8px 18px;border-radius:999px;' +
+    'background:rgba(20,16,12,.78);border:1px solid rgba(232,200,140,.45);color:#f4efe3;font:15px var(--font);' +
+    'letter-spacing:.04em;pointer-events:none;opacity:0;transition:opacity .2s ease';
+  document.body.appendChild(hint);
+  let shown = false;
+  const show = (on) => {
+    if (on === shown) return;
+    shown = on;
+    hint.textContent = tr('clickToContinue');
+    hint.style.opacity = on ? '1' : '0';
+  };
+  // capture phase on window: this click only re-captures the mouse, it must not also interact / reel / swing
+  window.addEventListener(
+    'mousedown',
+    (e) => {
+      if (!ctx.flags.awaitClick || ctx.state !== 'playing' || ctx.ui.menuOpen || e.target?.closest?.('#hud .panel, #mp, input, button')) return;
+      e.stopPropagation();
+      e.preventDefault();
+      ctx.input.lock();
+    },
+    true
+  );
+  ctx.input.onKeyDown((code) => {
+    // a second Escape while waiting: they really want the pause menu
+    if (code === 'Escape' && ctx.flags.awaitClick && performance.now() - ctx.flags.awaitClick > 150 && ctx.state === 'playing' && !ctx.ui.menuOpen) {
+      ctx.flags.awaitClick = false;
+      ctx.state = 'paused';
+      $('pause').classList.remove('hidden');
+    }
+  });
+  const tickHint = () => {
+    if (ctx.state !== 'playing') ctx.flags.awaitClick = false;
+    show(!!ctx.flags.awaitClick && ctx.state === 'playing' && !ctx.ui.menuOpen && !ctx.input.locked);
+    requestAnimationFrame(tickHint);
+  };
+  requestAnimationFrame(tickHint);
+}
+
 function wireOverlays() {
+  wireAwaitClick();
   wireI18n();
   wireTitle();
   // Only REQUEST the lock here: the overlay stays up until pointerlockchange confirms it ('input:lock').
@@ -414,12 +461,13 @@ function wireOverlays() {
   });
   events.on('input:unlock', () => {
     if (DEBUG) return; // automation-friendly: never auto-pause in debug mode
-    if (ctx.state === 'playing' && !ctx.ui.menuOpen && !ctx.flags.cinematic && !ctx.flags.typing) {
+    if (ctx.state === 'playing' && !ctx.ui.menuOpen && !ctx.flags.cinematic && !ctx.flags.typing && !ctx.flags.awaitClick) {
       ctx.state = 'paused';
       $('pause').classList.remove('hidden');
     }
   });
   events.on('input:lock', () => {
+    ctx.flags.awaitClick = false;
     if (ctx.state === 'paused') {
       ctx.state = 'playing';
       $('pause').classList.add('hidden');
@@ -471,7 +519,7 @@ function tick(dt, rawDt = dt, render = true) {
   }
 
   // Fallback: lost pointer lock while playing (e.g. menu closed outside a gesture)
-  if (!DEBUG && ctx.state === 'playing' && !ctx.ui.menuOpen && !ctx.flags.cinematic && !ctx.flags.typing && !ctx.input.locked) {
+  if (!DEBUG && ctx.state === 'playing' && !ctx.ui.menuOpen && !ctx.flags.cinematic && !ctx.flags.typing && !ctx.flags.awaitClick && !ctx.input.locked) {
     unlockedFor += dt;
     if (unlockedFor > 0.4) {
       ctx.state = 'paused';
