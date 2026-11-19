@@ -1,6 +1,24 @@
 // Static text for the HUD: survival tips, plant notes, death causes, rescue methods.
 // Pure data + tiny formatting helpers (no DOM), so it can be unit-tested in node.
 import { ITEMS } from '../core/items.js';
+import { keyLabel } from '../core/input.js';
+import { t, getLang, compassPoint } from '../core/i18n.js';
+
+/**
+ * V6: rewrite the positional key letters in an English hint for the player's keyboard layout
+ * (AZERTY: "W/S" -> "Z/S", "A/D" -> "Q/D", "WASD" -> "ZQSD", "Q to drop" / "Shift+Q" -> A). Identity on QWERTY.
+ */
+export function layoutKeys(text, kl = keyLabel) {
+  if (typeof text !== 'string' || !text) return text;
+  const W = kl('KeyW'), A = kl('KeyA'), S = kl('KeyS'), D = kl('KeyD'), Q = kl('KeyQ');
+  return text
+    .replace(/\bWASD\b/g, W + A + S + D)
+    .replace(/\bW\/S\b/g, `${W}/${S}`)
+    .replace(/\bA\/D\b/g, `${A}/${D}`)
+    .replace(/\bShift\+Q\b/g, `Shift+${Q}`)
+    .replace(/\bQ (to )?drop/g, (m, to) => `${Q} ${to || ''}drop`)
+    .replace(/\bQ \/ Shift\+/g, `${Q} / Shift+`);
+}
 
 /** Journal "Survival tips" tab. */
 export const TIPS = [
@@ -115,15 +133,18 @@ export function raftWinText(name) {
  */
 export function vehiclePanel(v, opts = {}) {
   if (!v) return null;
+  // V6: key letters follow the keyboard layout (AZERTY: Z/S · Q/D); text follows the UI language
+  const kl = opts.keyLabel || keyLabel;
+  const K = { f: kl('KeyW'), b: kl('KeyS'), l: kl('KeyA'), r: kl('KeyD'), e: kl('KeyE'), k: kl('KeyR') };
   if (v.type === 'motorboat') {
-    const title = `🚤 Motorboat · W/S throttle · A/D steer · E disembark${opts.canHeadHome ? ' · R head for home' : ''}`;
-    const sub = opts.canHeadHome ? 'Open sea: press R to head for home.' : opts.canDisembark ? 'Land is close: E to step ashore.' : 'Head out to open sea (> 250 m from any coast) to go home.';
+    const title = t('veh.motorTitle', K) + (opts.canHeadHome ? t('veh.headHome', K) : '');
+    const sub = opts.canHeadHome ? t('veh.motorOpenSea', K) : opts.canDisembark ? t('veh.landClose', K) : t('veh.motorFar');
     return { title, sub };
   }
-  const title = '🛶 Paddle raft · W/S paddle · A/D steer · E disembark';
-  let sub = opts.canDisembark ? 'Land is close: E to step ashore.' : 'Tempest Isle lies ~525 m north-east of the north-east beach.';
-  if (!opts.hasPaddle) sub = 'No paddle: you can only drift. Craft a Wooden Paddle (wood 2 + rope 1).';
-  else if (opts.exhausted) sub = 'Too tired to paddle hard: rest, eat or drink.';
+  const title = t('veh.raftTitle', K);
+  let sub = opts.canDisembark ? t('veh.landClose', K) : t('veh.raftFar');
+  if (!opts.hasPaddle) sub = t('veh.noPaddle');
+  else if (opts.exhausted) sub = t('veh.tired');
   return { title, sub };
 }
 
@@ -246,13 +267,16 @@ export function effectSummary(effects) {
 }
 
 /** Compass label for a bearing in degrees (0 = N, clockwise). */
-export function compassLabel(deg) {
-  const names = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-  return names[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
+export function compassLabel(deg, lang = getLang()) {
+  return compassPoint(deg, lang); // V6: N NE E SE S SO O NO in French
 }
 
 /** Heat (0..100) -> word. */
 export function heatWord(heat, min = 40, max = 75) {
+  return t('heat.' + heatWordId(heat, min, max)); // V6: translated
+}
+/** Heat (0..100) -> English word id (stable, untranslated). */
+export function heatWordId(heat, min = 40, max = 75) {
   if (heat < 15) return 'Freezing';
   if (heat < 28) return 'Cold';
   if (heat < min) return 'Chilly';
@@ -285,6 +309,10 @@ export const STRUCTURE_ICON = { campfire: '🔥', signal_fire: '💨', sos: '�
 /** v5 (V5-A): the backpack panel's help line (shown when no slot is selected). */
 export const PACK_HELP =
   'Drag items between the backpack and the hotbar (drop on a stack to merge, Shift-drag to split it). Right-click drops a stack (Shift: one), or drag it out of the panel. Hover an item and press 1-9 to put it on that hotbar slot, Q to drop it.';
+/** V6: PACK_HELP with the drop key as printed on the player's keyboard (AZERTY: A). */
+export function packHelp(kl = keyLabel) {
+  return layoutKeys(PACK_HELP, kl);
+}
 
 /** v5: text lines for an inventory slot tooltip: { title, desc, stack, fx }. Pure (unit-tested). */
 export function slotTooltip(id, n, limit, showFx = true) {
@@ -292,7 +320,7 @@ export function slotTooltip(id, n, limit, showFx = true) {
   if (!it) return null;
   return {
     title: `${it.icon} ${it.name}`,
-    desc: it.desc || '',
+    desc: layoutKeys(it.desc || ''), // V6: W/S · A/D follow the keyboard layout
     stack: limit > 1 ? `${n} / ${limit} in this stack` : 'One per slot',
     fx: showFx ? effectSummary(it.effects) : '',
   };

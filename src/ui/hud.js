@@ -13,20 +13,32 @@ import { clamp, clamp01, fmtHour, angleDiff } from '../core/util.js';
 import { DEATH, RESCUE_METHOD, fmtDuration, heatWord, compassLabel, STRUCTURE_ICON, objectiveView, objectiveSig, raftWinText, relBearing, compassPlace, HUNGER_ICON, deathLead, vehiclePanel, stormBannerOn, isleSightingDue } from './hud-data.js';
 import { createPanels } from './hud-panels.js';
 import { createMap } from './hud-map.js';
+import { t, onLangChange, noTranslate, getLang } from '../core/i18n.js';
+import { keyLabel, actionLabel } from '../core/input.js';
+import { layoutKeys } from './hud-data.js';
+const tr = t; // alias for functions where `t` is a local (ctx.time)
 
 const PX_PER_DEG = 3;
 const RAD2DEG = 180 / Math.PI;
 const MAX_TOASTS = 4; // v4: visible at once (fading ones count); the rest wait in toastQueue
 const MAX_TOAST_QUEUE = 10;
 /** v4: fishing widget phase lines (ctx.fishing.phase). */
+// V6: texts come from core/i18n.js (fish.*); keys follow the keyboard layout.
+const spaceName = () => (getLang() === 'fr' ? 'Espace' : 'Space');
 const FISH_TEXT = {
-  waiting: 'Line cast… wait for a bite',
-  bite: 'BITE! Press Space',
-  fight: "Reel! Tap Space, don't snap the line",
-  landed: 'Landed!',
-  lost: 'It got away…',
+  get waiting() { return t('fish.waiting'); },
+  get bite() { return t('fish.bite', { k: spaceName() }); },
+  get fight() { return t('fish.fight', { k: spaceName() }); },
+  get landed() { return t('fish.landed'); },
+  get lost() { return t('fish.lost'); },
 };
-const FISH_FOOT = { waiting: 'R to reel in', bite: '', landed: '', lost: '' };
+const FISH_FOOT = { get waiting() { return t('fish.footWaiting', { k: keyLabel('KeyR') }); }, bite: '', landed: '', lost: '' };
+/** V6: write text only when OUR value changed (never compare against the DOM: a page translator rewrites it). */
+function setText(e, s) {
+  if (!e || e._t === s) return;
+  e._t = s;
+  e.textContent = s;
+}
 // v3: stats.js still toasts hunger warnings with the leaves icon; the hunger STAT icon is now a steak
 const HUNGER_TEXT = /hung|starv|stomach|famish|hollow|edible|eat\b|food/i;
 
@@ -137,8 +149,9 @@ export function create(ctx) {
     E.flash = el('div', 'hud-flash', vig);
 
     // compass
-    const cmp = (E.compass = el('div', 'hud-compass', game));
+    const cmp = (E.compass = noTranslate(el('div', 'hud-compass', game)));
     E.cmpStrip = el('div', 'cmp-strip', cmp);
+    E.cmpLabels = [];
     for (let d = -180; d <= 540; d += 15) {
       const deg = ((d % 360) + 360) % 360;
       const x = (d + 180) * PX_PER_DEG;
@@ -149,6 +162,7 @@ export function create(ctx) {
         const name = compassLabel(deg);
         const l = el('div', 'cmp-label' + (name.length > 1 ? ' minor' : '') + (deg === 0 ? ' north' : ''), E.cmpStrip, name);
         l.style.left = x + 'px';
+        E.cmpLabels.push({ l, deg });
       }
     }
     E.cmpMarkers = [];
@@ -161,17 +175,17 @@ export function create(ctx) {
     E.cmpIsle = el('div', 'cmp-marker cmp-yard', cmp, '🏝️');
     E.cmpIsle.title = 'Tempest Isle';
     el('div', 'cmp-needle', cmp);
-    E.cmpDeg = el('div', 'cmp-deg', game);
+    E.cmpDeg = noTranslate(el('div', 'cmp-deg', game));
 
     // clock
-    const clk = el('div', 'hud-clock hud-glass', game);
+    const clk = noTranslate(el('div', 'hud-clock hud-glass', game)); // V6: the "Jour"/"Day" flicker fix
     E.clkIcon = el('span', 'clk-icon', clk, '☀️');
     const clkText = el('div', '', clk);
-    E.clkDay = el('div', 'clk-day', clkText, 'Day 1');
+    E.clkDay = el('div', 'clk-day', clkText, t('clock.day', { n: 1 }));
     E.clkTime = el('div', 'clk-time', clkText, '06:00');
     E.clkDiff = el('div', 'clk-diff', clkText, '');
     E.clkWeather = el('span', 'clk-weather', clk, '');
-    E.journalBadge = el('div', 'hud-journal-badge', game, '📖 New journal entry · press J');
+    E.journalBadge = noTranslate(el('div', 'hud-journal-badge', game, t('journal.badge', { k: actionLabel('journal') })));
 
     // v2: boat objective tracker (top-left); v4: one left column with the tip card under it (never overlapping)
     E.left = el('div', 'hud-left', game);
@@ -185,15 +199,15 @@ export function create(ctx) {
     E.objReady = el('div', 'obj-ready', E.obj, '🔨 Ready to build at the Boatyard!');
 
     // v2: search-party banner (top-centre, under the compass); v3: stacked with the storm banner
-    E.banners = el('div', 'hud-banners', game);
+    E.banners = noTranslate(el('div', 'hud-banners', game));
     E.rescue = el('div', 'hud-rescue hud-glass', E.banners);
     E.rescueTitle = el('div', 'rs-title', E.rescue, '');
     const rsb = el('div', 'rs-bar', E.rescue);
     E.rescueFill = el('div', 'rs-fill', rsb);
     E.rescueTip = el('div', 'rs-tip', E.rescue, '');
-    E.storm = el('div', 'hud-storm hud-glass', E.banners, '⛈️ Storm over Tempest Isle: rafts capsize and fires go out. Get indoors!');
+    E.storm = el('div', 'hud-storm hud-glass', E.banners, t('storm.banner'));
     // v3: vehicle panel (above the hotbar while aboard)
-    E.vehicle = el('div', 'hud-vehicle hud-glass', game);
+    E.vehicle = noTranslate(el('div', 'hud-vehicle hud-glass', game));
     E.vehTitle = el('div', 'veh-title', E.vehicle, '');
     E.vehSub = el('div', 'veh-sub', E.vehicle, '');
 
@@ -206,8 +220,8 @@ export function create(ctx) {
       ['hunger', HUNGER_ICON],
       ['energy', '⚡'],
     ]) {
-      const row = el('div', 'stat stat-' + key, st);
-      row.title = key[0].toUpperCase() + key.slice(1);
+      const row = noTranslate(el('div', 'stat stat-' + key, st));
+      row.title = t('stat.' + key);
       el('span', 'stat-icon', row, icon);
       const bar = el('div', 'bar', row);
       const ghost = el('div', 'ghost', bar);
@@ -215,8 +229,8 @@ export function create(ctx) {
       const val = el('span', 'stat-val', row, '100');
       E.bars[key] = { row, fill, ghost, val };
     }
-    const heat = (E.heatRow = el('div', 'stat stat-heat', st));
-    heat.title = 'Body heat (the framed band is comfortable)';
+    const heat = (E.heatRow = noTranslate(el('div', 'stat stat-heat', st)));
+    heat.title = t('stat.heat');
     el('span', 'stat-icon', heat, '🌡️');
     const gauge = el('div', 'gauge', heat);
     const band = el('div', 'gauge-band', gauge);
@@ -228,7 +242,7 @@ export function create(ctx) {
     E.breath = el('div', 'hud-breath', st);
     E.bubbles = [];
     for (let i = 0; i < 10; i++) E.bubbles.push(el('span', '', E.breath, '🫧'));
-    E.depth = el('span', 'hud-depth', E.breath, '');
+    E.depth = noTranslate(el('span', 'hud-depth', E.breath, ''));
     E.breath.style.display = 'none';
     E.chips = el('div', 'hud-chips', st);
     E.chipEls = {};
@@ -237,14 +251,14 @@ export function create(ctx) {
     E.cross = el('div', 'hud-cross', game);
     const center = el('div', 'hud-center', game);
     E.prompt = el('div', 'hud-prompt', center);
-    E.fish = el('div', 'hud-fish hud-glass', center);
+    E.fish = noTranslate(el('div', 'hud-fish hud-glass', center));
     E.fishPhase = el('div', 'fish-phase', E.fish, '');
     const fbars = el('div', 'fish-bars', E.fish);
     let frow = el('div', 'fish-row', fbars);
-    el('span', 'fish-lbl', frow, 'Catch');
+    E.fishLblCatch = el('span', 'fish-lbl', frow, t('fish.catch'));
     E.fishProg = el('div', 'fish-fill prog', el('div', 'fish-bar', frow));
     frow = el('div', 'fish-row', fbars);
-    el('span', 'fish-lbl', frow, 'Line');
+    E.fishLblLine = el('span', 'fish-lbl', frow, t('fish.line'));
     E.fishTens = el('div', 'fish-fill ok', el('div', 'fish-bar', frow));
     E.fishFoot = el('div', 'fish-foot', E.fish, '');
 
@@ -294,6 +308,7 @@ export function create(ctx) {
       return null;
     }
     if (opts.icon === '🍃' && HUNGER_TEXT.test(text)) opts = { ...opts, icon: HUNGER_ICON };
+    text = layoutKeys(text); // V6: positional key letters follow the keyboard layout (AZERTY: Z/S · Q/D, A drops)
     const kind = opts.kind || 'info';
     const duration = opts.duration ?? (kind === 'story' ? 7 : kind === 'bad' ? 5 : 4);
     const key = opts.key || null;
@@ -361,7 +376,8 @@ export function create(ctx) {
     if (!has) return;
     for (const l of lines) {
       const line = el('div', 'prompt-line', E.prompt);
-      el('span', 'key', line, l.key);
+      // V6: the badge shows the key as printed on this keyboard; never translated
+      noTranslate(el('span', 'key', line, /^[A-Z]$/.test(l.key || '') ? keyLabel('Key' + l.key) : l.key));
       el('span', '', line, l.label);
     }
   }
@@ -376,7 +392,7 @@ export function create(ctx) {
       E.subtitle.classList.remove('show');
       return;
     }
-    E.subtitle.textContent = text;
+    E.subtitle.textContent = layoutKeys(text);
     void E.subtitle.offsetWidth;
     E.subtitle.classList.add('show');
     subtitleTimer = setTimeout(() => E.subtitle.classList.remove('show'), seconds * 1000);
@@ -549,10 +565,12 @@ export function create(ctx) {
     panels = createPanels(ctx, api, E.panels, map);
     const ev = ctx.events;
 
-    ctx.input?.onKeyDown?.((code) => {
+    ctx.input?.onKeyDown?.((code, e) => {
       if (screenShown) return;
       let which = null;
+      // V6: positional code OR the produced letter (AZERTY's M is code 'Semicolon'); e is null for tap()
       for (const name in PANEL_KEYS) if (PANEL_KEYS[name].includes(code)) which = name;
+      if (!which && e && ctx.input?.matches) for (const name in PANEL_KEYS) if (ctx.input.matches(PANEL_KEYS[name], code, e)) which = name;
       if (api.menuOpen) {
         if (code === 'Escape' || (which && which === panels.current)) closePanel(code === 'Escape');
         else if (which) openPanel(which);
@@ -560,6 +578,27 @@ export function create(ctx) {
       }
       if (which) openPanel(which);
     });
+
+    // V6: language / keyboard-layout changes refresh the HUD's own strings (caches reset -> rewritten next frame)
+    const refreshI18n = () => {
+      for (const { l, deg } of E.cmpLabels || []) l.textContent = compassLabel(deg);
+      lastHeading = -999;
+      E.clkDay._t = E.clkDiff._t = undefined;
+      E.journalBadge.textContent = t('journal.badge', { k: actionLabel('journal') });
+      E.storm.textContent = t('storm.banner');
+      for (const key in E.bars) E.bars[key].row.title = t('stat.' + key);
+      E.heatRow.title = t('stat.heat');
+      barCache.heat = undefined;
+      E.fishLblCatch.textContent = t('fish.catch');
+      E.fishLblLine.textContent = t('fish.line');
+      fishC.phase = '';
+      fishC.sec = -1;
+      vehSig = null;
+      rescueKind = undefined; // forces the banner title + tip to rewrite
+      hotbarSig = null;
+    };
+    onLangChange(refreshI18n);
+    ev.on('input:layout', refreshI18n);
 
     ev.on('game:start', () => {
       startHours = ctx.time.hoursTotal;
@@ -834,7 +873,7 @@ export function create(ctx) {
     }
     if (!hintQueue.length || now < hintGapUntil || api.menuOpen) return;
     const h = hintQueue.shift();
-    E.hintText.textContent = h.text;
+    E.hintText.textContent = layoutKeys(h.text); // V6: "Q drops" -> "A drops" on AZERTY
     E.hint.classList.add('show');
     const words = h.text.split(/\s+/).length;
     hintActive = { until: now + clamp(3.5 + words * 0.3, 6, 13) };
@@ -855,7 +894,7 @@ export function create(ctx) {
     lastHeading = h;
     const w = E.compass.clientWidth || 520;
     E.cmpStrip.style.transform = `translateX(${(w / 2 - (h + 180) * PX_PER_DEG).toFixed(1)}px)`;
-    E.cmpDeg.textContent = `${compassLabel(h)} ${Math.round(h) % 360}°`;
+    setText(E.cmpDeg, `${compassLabel(h)} ${Math.round(h) % 360}°`);
   }
 
   function updateCompassMarkers() {
@@ -890,20 +929,21 @@ export function create(ctx) {
     const t = ctx.time;
     const hr = t.hour;
     const icon = hr >= 5 && hr < 7.5 ? '🌅' : hr >= 7.5 && hr < 18 ? '☀️' : hr >= 18 && hr < 20 ? '🌇' : '🌙';
-    if (E.clkIcon.textContent !== icon) E.clkIcon.textContent = icon;
-    const day = 'Day ' + t.day;
-    if (E.clkDay.textContent !== day) E.clkDay.textContent = day;
-    const time = fmtHour(hr);
-    if (E.clkTime.textContent !== time) E.clkTime.textContent = time;
+    setText(E.clkIcon, icon);
+    setText(E.clkDay, tr('clock.day', { n: t.day }));
+    setText(E.clkTime, fmtHour(hr));
     const rain = ctx.weather?.rain ?? ctx.uniforms?.uRain?.value ?? 0;
     const cloud = ctx.weather?.cloudiness ?? 0;
     const w = rain > 0.55 ? '⛈️' : rain > 0.12 ? '🌧️' : cloud > 0.6 ? '☁️' : cloud > 0.3 ? '⛅' : '';
-    if (E.clkWeather.textContent !== w) E.clkWeather.textContent = w;
-    const dl = ctx.difficulty?.label || '';
-    if (E.clkDiff.textContent !== dl) {
-      E.clkDiff.textContent = dl;
-      E.clkDiff.className = 'clk-diff ' + (ctx.difficulty?.id || '');
-      E.clkDiff.title = dl ? `Difficulty: ${dl}` : '';
+    setText(E.clkWeather, w);
+    const did = ctx.difficulty?.id || '';
+    const dl0 = ctx.difficulty?.label || '';
+    const dl = dl0 && did ? tr('diff.' + did) : dl0;
+    const dlOut = dl === 'diff.' + did ? dl0 : dl; // unknown id: keep the config label
+    if (E.clkDiff._t !== dlOut) {
+      setText(E.clkDiff, dlOut);
+      E.clkDiff.className = 'clk-diff ' + did;
+      E.clkDiff.title = dlOut ? tr('diff.title', { d: dlOut }) : '';
     }
   }
 
@@ -944,7 +984,7 @@ export function create(ctx) {
     if (kind !== rescueKind) {
       rescueKind = kind;
       E.rescue.classList.toggle('show', !!kind);
-      E.rescueTitle.textContent = kind === 'boat' ? '🚤 Search boat offshore!' : kind ? '🚁 Search helicopter overhead!' : '';
+      E.rescueTitle.textContent = kind === 'boat' ? t('rescue.boat') : kind ? t('rescue.heli') : '';
       E.cmpRescue.textContent = kind === 'boat' ? '🚤' : '🚁';
       rescuePct = -1;
       rescueTipKey = '';
@@ -960,10 +1000,7 @@ export function create(ctx) {
     const tipKey = a >= 0.5 ? 'hot' : 'cold';
     if (tipKey !== rescueTipKey) {
       rescueTipKey = tipKey;
-      E.rescueTip.textContent =
-        tipKey === 'hot'
-          ? "They're turning toward you! Keep waving (G) and keep your signals burning."
-          : 'Get into the open, hold G to wave, light a signal fire';
+      E.rescueTip.textContent = t(tipKey === 'hot' ? 'rescue.hot' : 'rescue.cold', { k: keyLabel('KeyG') });
     }
   }
 
@@ -1043,9 +1080,9 @@ export function create(ctx) {
       let txt = FISH_TEXT[ph] || '';
       if (ph === 'lost') {
         const why = F.state?.result?.reason;
-        if (why === 'snap') txt = 'Snap! The line broke. It got away…';
-        else if (why === 'cancel' || why === 'moved') txt = 'You reel the line in.';
-        else if (why === 'early') txt = 'Too early! It got away…';
+        if (why === 'snap') txt = t('fish.snap');
+        else if (why === 'cancel' || why === 'moved') txt = t('fish.cancel');
+        else if (why === 'early') txt = t('fish.early');
       }
       E.fishPhase.textContent = txt;
       E.fish.classList.toggle('bite', ph === 'bite');
@@ -1082,7 +1119,7 @@ export function create(ctx) {
       const sec = Math.max(0, Math.ceil(F.timeLeft || 0));
       if (sec !== fishC.sec) {
         fishC.sec = sec;
-        E.fishFoot.textContent = `${sec} s left · R to give up`;
+        E.fishFoot.textContent = t('fish.footLeft', { s: sec, k: keyLabel('KeyR') });
       }
     }
   }
@@ -1138,7 +1175,7 @@ export function create(ctx) {
       E.heatMarker.style.left = clamp(heat, 0, 100).toFixed(1) + '%';
       const cmin = CONFIG.stats.heatComfortMin, cmax = CONFIG.stats.heatComfortMax;
       const word = heatWord(heat, cmin, cmax);
-      if (E.heatVal.textContent !== word) E.heatVal.textContent = word;
+      setText(E.heatVal, word);
       E.heatRow.classList.toggle('cold', heat < cmin);
       E.heatRow.classList.toggle('hot', heat > cmax);
       E.heatRow.classList.toggle('crit', heat < 25 || heat > 86);

@@ -2,7 +2,8 @@
 // Starts the server in-process on a random port > 9000 and drives real WebSocket clients through: welcome + host
 // flag, snapshot relay (never the recipient), event relay (never echoed, unknown names dropped, time:set host-only),
 // chat sanitizing, room full, unknown room, host re-election on leave, the room disappearing when empty.
-// Idle drop (30 s) is not tested: LIMITS.idleMs is frozen in protocol.js and the server has no override.
+// Leaving = bye + close (what the client's leave() does); an abrupt close keeps the player for a grace window,
+// which (with the heartbeat) is covered by reliability.test.mjs.
 import assert from 'node:assert/strict';
 import { WebSocket } from 'ws';
 import { MSG, ERRORS, ROOM_ALPHABET, PROTOCOL_VERSION, encode, decode, sanitizeChat } from '../src/net/protocol.js';
@@ -77,6 +78,7 @@ async function closeClient(c) {
   if (c.closed) return;
   await new Promise((r) => {
     c.ws.once('close', r);
+    if (c.ws.readyState === WebSocket.OPEN) c.ws.send(encode(MSG.BYE));
     c.ws.close();
   });
 }
@@ -117,7 +119,9 @@ await step("welcome: a joiner is not the host and gets the host's seed/difficult
   assert.equal(wb.room, room);
   assert.equal(wb.hostId, wa.id);
   assert.notEqual(wb.id, wa.id);
-  assert.deepEqual(wb.players, [{ id: wa.id, name: 'Alice' }]);
+  assert.deepEqual(wb.players, [{ id: wa.id, name: 'Alice', connected: true }]);
+  assert.equal(typeof wb.token, 'string');
+  assert.equal(wb.resumed, false);
   assert.equal(wb.difficulty, 'hard');
   assert.equal(wb.seed, 42);
   assert.ok(wb.timeHours >= 30 && wb.timeHours < 31, `extrapolated clock ${wb.timeHours}`);
@@ -263,8 +267,6 @@ await step('the room disappears when its last player leaves', async () => {
   assert.equal(wg.code, ERRORS.NO_ROOM);
   await closeClient(G);
 });
-
-console.log('- idle drop (30 s, no override in index.js): not tested');
 
 for (const c of sockets) {
   try {

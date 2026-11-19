@@ -62,10 +62,10 @@
         </div>
         </div>
         <div class="controls">
-          <span><b>WASD / ZQSD</b> move</span><span><b>Shift</b> sprint</span><span><b>Space</b> jump / swim up</span>
-          <span><b>X</b> dive</span><span><b>E / Click</b> interact</span><span><b>R</b> secondary action</span><span><b>F / Right-click</b> use item</span>
-          <span><b>1-9 / Wheel</b> hotbar</span><span><b>Tab / C</b> craft</span><span><b>J</b> journal</span>
-          <span><b>M</b> map</span><span><b>T</b> torch</span><span><b>G</b> wave for help</span><span><b>N</b> mute</span>
+          <span><b data-keys="move" translate="no" class="notranslate">WASD / ZQSD</b> move</span><span><b translate="no" class="notranslate">Shift</b> sprint</span><span><b translate="no" class="notranslate">Space</b> jump / swim up</span>
+          <span><b data-keys="dive" translate="no" class="notranslate">X</b> dive</span><span><b data-keys="interact" translate="no" class="notranslate">E / Click</b> interact</span><span><b data-keys="secondary" translate="no" class="notranslate">R</b> secondary action</span><span><b data-keys="useItem" translate="no" class="notranslate">F / Right-click</b> use item</span>
+          <span><b translate="no" class="notranslate">1-9 / Wheel</b> hotbar</span><span><b data-keys="drop" translate="no" class="notranslate">Q</b> drop</span><span><b data-keys="craft" translate="no" class="notranslate">Tab / C</b> craft</span><span><b data-keys="journal" translate="no" class="notranslate">J</b> journal</span>
+          <span><b data-keys="map" translate="no" class="notranslate">M</b> map</span><span><b data-keys="torch" translate="no" class="notranslate">T</b> torch</span><span><b data-keys="wave" translate="no" class="notranslate">G</b> wave for help</span><span><b data-keys="mute" translate="no" class="notranslate">N</b> mute</span>
         </div>
         <div class="muted small">Headphones recommended · intro can be skipped with Space</div>
       </div>
@@ -78,6 +78,7 @@
         <div class="options" data-stop>
           <label>Mouse sensitivity <input id="opt-sens" type="range" min="0.3" max="2.5" step="0.05" value="1" /></label>
           <label>Volume <input id="opt-vol" type="range" min="0" max="1" step="0.05" value="0.8" /></label>
+          <div class="opt-lang notranslate" translate="no"><span id="opt-lang-label">Language</span> <span class="lang-toggle"><button type="button" data-lang="en">EN</button><button type="button" data-lang="fr">FR</button></span></div>
         </div>
         <!-- Multiplayer (wired by src/net/net.js). Hidden until the net module enables it. -->
         <div id="mp" class="mp hidden" data-stop>
@@ -95,10 +96,10 @@
           <div id="mp-players" class="mp-players"></div>
         </div>
         <div class="controls">
-          <span><b>WASD / ZQSD</b> move</span><span><b>Shift</b> sprint</span><span><b>Space</b> jump / swim up</span>
-          <span><b>X</b> dive</span><span><b>E / Click</b> interact</span><span><b>R</b> secondary action</span><span><b>F / Right-click</b> use item</span>
-          <span><b>1-9 / Wheel</b> hotbar</span><span><b>Tab / C</b> craft</span><span><b>J</b> journal</span>
-          <span><b>M</b> map</span><span><b>T</b> torch</span><span><b>G</b> wave for help</span><span><b>N</b> mute</span>
+          <span><b data-keys="move" translate="no" class="notranslate">WASD / ZQSD</b> move</span><span><b translate="no" class="notranslate">Shift</b> sprint</span><span><b translate="no" class="notranslate">Space</b> jump / swim up</span>
+          <span><b data-keys="dive" translate="no" class="notranslate">X</b> dive</span><span><b data-keys="interact" translate="no" class="notranslate">E / Click</b> interact</span><span><b data-keys="secondary" translate="no" class="notranslate">R</b> secondary action</span><span><b data-keys="useItem" translate="no" class="notranslate">F / Right-click</b> use item</span>
+          <span><b translate="no" class="notranslate">1-9 / Wheel</b> hotbar</span><span><b data-keys="drop" translate="no" class="notranslate">Q</b> drop</span><span><b data-keys="craft" translate="no" class="notranslate">Tab / C</b> craft</span><span><b data-keys="journal" translate="no" class="notranslate">J</b> journal</span>
+          <span><b data-keys="map" translate="no" class="notranslate">M</b> map</span><span><b data-keys="torch" translate="no" class="notranslate">T</b> torch</span><span><b data-keys="wave" translate="no" class="notranslate">G</b> wave for help</span><span><b data-keys="mute" translate="no" class="notranslate">N</b> mute</span>
         </div>
       </div>
     </div>

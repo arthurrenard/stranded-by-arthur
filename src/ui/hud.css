@@ -1942,3 +1942,38 @@ body:not(.letterbox) #hud.hud-veh .hud-subtitle {
 .obj-icon {
   filter: saturate(0.82);
 }
+
+/* V6 (V6-L): pause overlay language toggle (EN / FR); lives here because hud.css loads with the game */
+.options .opt-lang {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.lang-toggle {
+  display: inline-flex;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.lang-toggle button {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 3px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+}
+.lang-toggle button.on {
+  background: rgba(255, 255, 255, 0.2);
+  opacity: 1;
+}
+@media (max-width: 520px) {
+  .options {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+}

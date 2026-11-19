@@ -3,7 +3,7 @@
 // craft or item use), never per frame, because the game is frozen while a panel is open.
 import { ITEMS, isConsumable } from '../core/items.js';
 import { fmtHour } from '../core/util.js';
-import { TIPS, PLANTS, SAFETY_BADGE, effectSummary, compassLabel, MAP_LANDMARKS, STRUCTURE_ICON, PART_WHERE, partsSummary, PACK_HELP, slotTooltip } from './hud-data.js';
+import { TIPS, PLANTS, SAFETY_BADGE, effectSummary, compassLabel, MAP_LANDMARKS, STRUCTURE_ICON, PART_WHERE, partsSummary, slotTooltip, packHelp, layoutKeys } from './hud-data.js';
 
 function el(tag, cls, parent, text) {
   const e = document.createElement(tag);
@@ -126,7 +126,7 @@ export function createPanels(ctx, ui, host, map) {
         el('div', 'r-icon', row, r.icon);
         const mid = el('div', '', row);
         el('div', 'r-name', mid, r.name);
-        if (r.desc) el('div', 'r-desc', mid, r.desc);
+        if (r.desc) el('div', 'r-desc', mid, layoutKeys(r.desc));
         const req = el('div', 'req', mid);
         for (const q of r.reqs) reqChip(req, q);
         if (!r.ok && r.reason) el('div', 'r-reason', mid, r.reason);
@@ -299,7 +299,7 @@ export function createPanels(ctx, ui, host, map) {
     if (!st) {
       packSel = -1;
       if (!inv.list?.().length) el('div', '', info, 'Empty. Look around: sticks, stones, plants…').style.marginBottom = '4px';
-      info.append(PACK_HELP);
+      info.append(packHelp()); // V6: drop key as printed (AZERTY: A)
       return;
     }
     const it = ITEMS[st.id];
@@ -373,7 +373,7 @@ export function createPanels(ctx, ui, host, map) {
         el('div', 'tip-icon', d, t.icon);
         const tx = el('div', '', d);
         el('b', '', tx, t.title);
-        tx.append(t.text);
+        tx.append(layoutKeys(t.text)); // V6: W/S · A/D follow the keyboard layout
       }
     } else if (journalTab === 'plants') {
       const pr = el('div', 'progress', body);
@@ -524,7 +524,7 @@ export function createPanels(ctx, ui, host, map) {
       el('div', 'tip-icon', d, icon);
       const tx = el('div', '', d);
       el('b', '', tx, title);
-      tx.append(text);
+      tx.append(layoutKeys(text));
     }
   }
 

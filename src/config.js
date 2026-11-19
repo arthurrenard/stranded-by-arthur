@@ -252,17 +252,20 @@ export const CONFIG = {
     interact: ['KeyE', 'Mouse0'],
     secondary: ['KeyR'],
     useItem: ['KeyF', 'Mouse2'],
-    craft: ['Tab', 'KeyC'],
-    journal: ['KeyJ'],
-    map: ['KeyM'],
+    // V6: menu actions also match the produced letter ('Letter:x', see core/input.js) so the printed
+    // key works on AZERTY/QWERTZ/other layouts; movement and the keys around it stay positional.
+    craft: ['Tab', 'KeyC', 'Letter:c'],
+    journal: ['KeyJ', 'Letter:j'],
+    map: ['KeyM', 'Letter:m'],
     torch: ['KeyT'],
     wave: ['KeyG'],
     dive: ['KeyX'], // hold to dive while swimming (Space rises)
     reel: ['Space', 'Mouse0'], // fishing: hook and reel
     chat: ['Enter'], // multiplayer chat
-    scoreboard: ['KeyP'], // multiplayer: who is online
+    scoreboard: ['KeyP', 'Letter:p'], // multiplayer: who is online
     hotbar: ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'],
-    mute: ['KeyN'],
+    mute: ['KeyN', 'Letter:n'],
+    drop: ['KeyQ'], // positional: AZERTY's A key (code KeyQ); 'q' there is move-left
   },
 
   graphics: {

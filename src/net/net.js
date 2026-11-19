@@ -16,6 +16,11 @@
 // raft:stage{used} → ctx.raft.applyDeposit / applySync / applyStage; vehicle:placed / pose / seat → ctx.vehicles.applyRemote.
 // PAUSED_OK_EVENTS also go out while paused (join-time sync). ctx.net.relay(name, payload) sends one shared event
 // straight to the room (packed, not via the bus).
+// V6 reliability (docs/MULTIPLAYER.md § Reliability): an unexpected close keeps the room, id, host role and avatars
+// (api.reconnecting) and retries forever (0.5 → 8 s backoff with jitter; at once on 'online' / tab visible); the
+// hello carries resumeId + resumeToken so the server re-attaches the same player inside its grace window. A 10 s
+// setInterval sends an app ping and spots a dead socket (no inbound message for 20 s). leave() sends 'bye' (no
+// grace). presence{id, connected} marks another player as "(away)" instead of removing them.
 import { CONFIG } from '../config.js';
 import { MSG, ERRORS, PROTOCOL_VERSION, SHARED_EVENTS, PAUSED_OK_EVENTS, encode, decode, normalizeRoomCode, sanitizeName, sanitizeChat, colorForId } from './protocol.js';
 import { createAvatar } from '../player/avatar.js';
@@ -27,7 +32,8 @@ export const isApplying = () => applying;
 
 const LS_NAME = 'stranded.mp.name';
 const LS_SERVER = 'stranded.mp.server';
-const RECONNECT_BASE_MS = 1000, RECONNECT_MAX_MS = 30_000, RECONNECT_TRIES = 8, CONNECT_TIMEOUT_MS = 8000;
+const RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 8000], CONNECT_TIMEOUT_MS = 8000;
+const KEEPALIVE_MS = 10_000, STALE_MS = 20_000; // app ping (not tied to rAF) · no inbound message this long = dead socket
 const CLOCK_SEND_SEC = 10, CLOCK_HARD_H = 2 / 60, CLOCK_SOFT_SEC = 4, CLOCK_EPS_H = 0.0015, CLOCK_MAX_SCALE = 8;
 const PING_SEC = 2, HEARTBEAT_SEC = 3, PANEL_REFRESH_SEC = 1;
 const WIN_EVENTS = ['rescue:success', 'raft:sailed'];
@@ -87,6 +93,7 @@ export function create(ctx) {
     server: '',
     ping: 0,
     status: 'offline',
+    reconnecting: false, // the socket dropped; room, id, host role and players are kept while we get back in
     players,
     create: createRoom,
     join,
@@ -102,6 +109,8 @@ export function create(ctx) {
   };
 
   let ws = null, want = null, intentional = false, attempts = 0, connectTimer = 0, reconnectTimer = 0;
+  let session = null; // { id, token, room } from the last welcome: the resume credentials
+  let lastRx = 0, keepTimer = 0, docWired = false;
   let started = false, reloading = false; // 'game:start' seen · a difficulty reload is pending
   let ui = null; // ./netUI.js instance
   const els = {};
@@ -116,8 +125,8 @@ export function create(ctx) {
     let p = players.get(id);
     if (p) {
       if (name && name !== p.name) {
-        p.name = name;
-        p.avatar?.setName(name);
+        p.name = sanitizeName(name);
+        p.avatar?.setName(tagName(p));
       }
       return p;
     }
@@ -130,11 +139,19 @@ export function create(ctx) {
       pitch: 0,
       state: { moving: false, sprinting: false, swimming: false, aboard: false, waving: false, torch: false },
       ping: 0,
+      away: false, // their socket dropped: the server holds their slot for a while
       avatar: null,
     };
     players.set(id, p);
     panelDirty = true;
     return p;
+  }
+  const tagName = (p) => (p.away ? `${p.name} (away)` : p.name);
+  function setAway(p, away) {
+    if (!p || p.away === away) return;
+    p.away = away;
+    p.avatar?.setName(tagName(p));
+    panelDirty = true;
   }
   function removePlayer(id) {
     const p = players.get(id);
@@ -148,6 +165,7 @@ export function create(ctx) {
     try {
       p.avatar = createAvatar(ctx, { name: p.name, color: p.color, id: p.id });
       ctx.scene.add(p.avatar.object);
+      if (p.away) p.avatar.setName(tagName(p));
     } catch (e) {
       console.warn('[net] avatar failed', e);
     }
@@ -176,6 +194,7 @@ export function create(ctx) {
       const n = players.size + 1;
       return `in room ${api.room}${api.isHost ? ' (host)' : ''} · ${n} player${n === 1 ? '' : 's'}`;
     }
+    if (api.reconnecting) return `reconnecting to ${api.room}…`;
     return want ? 'connecting…' : 'offline';
   }
   function refreshPanel() {
@@ -187,10 +206,10 @@ export function create(ctx) {
     els.join?.classList.toggle('hidden', busy);
     if (els.room) els.room.classList.toggle('hidden', busy);
     if (els.players) {
-      if (!api.connected) els.players.textContent = '';
+      if (!api.connected && !api.reconnecting) els.players.textContent = '';
       else {
         const rows = [`${api.name} (you)${api.isHost ? ' 👑' : ''}`];
-        for (const p of players.values()) rows.push(`${p.name}${p.id === api.hostId ? ' 👑' : ''}${p.ping ? ` · ${p.ping} ms` : ''}`);
+        for (const p of players.values()) rows.push(`${p.name}${p.id === api.hostId ? ' 👑' : ''}${p.away ? ' · reconnecting' : p.ping ? ` · ${p.ping} ms` : ''}`);
         els.players.textContent = rows.join('   ·   ');
       }
     }
@@ -199,6 +218,11 @@ export function create(ctx) {
   function setOffline() {
     api.mode = 'offline';
     api.connected = false;
+    api.reconnecting = false;
+    if (!want) {
+      session = null;
+      stopKeepalive();
+    }
     api.isHost = false;
     api.hostId = null;
     api.room = null;
@@ -213,12 +237,12 @@ export function create(ctx) {
   let skipGuard = null; // { T, orig, fn } while installed
   function syncSkipGuard() {
     const T = ctx.time;
-    const need = api.connected && !api.isHost;
+    const need = (api.connected || api.reconnecting) && !api.isHost;
     if (need && !skipGuard && T && typeof T.skipHours === 'function') {
       const orig = T.skipHours;
       const fn = function (h) {
         // net's own hard clock sync runs with `applying` set; offline / host / reconnecting → pass through
-        if (applying || !api.connected || api.isHost) return orig.call(T, h);
+        if (applying || !(api.connected || api.reconnecting) || api.isHost) return orig.call(T, h);
         toast("In multiplayer the host's clock rules: only the host can skip time", { icon: '⏳', kind: 'warn', key: 'net-skip' });
         return false;
       };
@@ -238,6 +262,7 @@ export function create(ctx) {
     intentional = true;
     want = null;
     reloading = true;
+    sayBye();
     closeSocket();
     dropRoom(true);
     setOffline();
@@ -281,6 +306,11 @@ export function create(ctx) {
     if (!set) handlers.set(type, (set = new Set()));
     set.add(fn);
     return () => set.delete(fn);
+  }
+  /** An intentional leave: the server drops us at once (no grace window). */
+  function sayBye() {
+    send(MSG.BYE);
+    session = null;
   }
   function closeSocket() {
     clearTimeout(connectTimer);
@@ -332,6 +362,9 @@ export function create(ctx) {
         name: want.name,
         room: want.room || undefined,
         resume: !!want.resume, // we were in this room before: ask the server to re-create it if it restarted
+        // ...and to re-attach us (same id, host role kept) if it still holds our slot
+        resumeId: want.resume && session?.room === want.room ? session.id : undefined,
+        resumeToken: want.resume && session?.room === want.room ? session.token : undefined,
         seed: CONFIG.seed,
         difficulty: ctx.difficulty?.id,
         timeHours: ctx.time?.hoursTotal,
@@ -340,6 +373,7 @@ export function create(ctx) {
     };
     sock.onmessage = (e) => {
       if (sock !== ws) return;
+      lastRx = Date.now();
       const m = decode(e.data);
       if (m) handle(m);
     };
@@ -348,26 +382,73 @@ export function create(ctx) {
       if (sock !== ws) return;
       clearTimeout(connectTimer);
       ws = null;
-      const wasConnected = api.connected;
-      dropRoom(false);
-      if (intentional || !want) return setOffline();
-      scheduleReconnect(wasConnected);
+      if (intentional || !want) {
+        dropRoom(false);
+        return setOffline();
+      }
+      if (api.connected) beginOutage();
+      scheduleReconnect();
     };
   }
-  function scheduleReconnect(wasConnected) {
-    attempts++;
+  /** The socket dropped while in a room: keep everything (room, id, host role, avatars) and get back in. */
+  function beginOutage() {
     api.connected = false;
-    api.mode = 'offline';
-    if (attempts > RECONNECT_TRIES) {
-      toast('Lost the connection to the session.', { kind: 'bad' });
-      want = null;
-      updateUrl(null);
-      return setOffline();
+    api.reconnecting = true;
+    clock.err = 0;
+    restoreScale(); // no soft clock correction runs while we are away
+    syncSkipGuard();
+    toast('Connection lost. Reconnecting…', { kind: 'warn', key: 'net-conn', duration: 6 });
+    ui?.system?.('Connection lost. Reconnecting…');
+    panelDirty = true;
+  }
+  function scheduleReconnect() {
+    clearTimeout(reconnectTimer);
+    attempts++;
+    // retry forever while the player wants to be in the room: 0.5, 1, 2, 4, 8, 8, 8… s (± 20 %)
+    const base = RECONNECT_DELAYS_MS[Math.min(attempts, RECONNECT_DELAYS_MS.length) - 1];
+    if (attempts === 1 && !api.reconnecting) toast('Connecting…', { kind: 'warn', key: 'net-conn' });
+    panelDirty = true;
+    reconnectTimer = setTimeout(openSocket, base * (0.8 + Math.random() * 0.4));
+  }
+  /** 'online' / tab visible / watchdog: if the link is not known-good, reconnect right now (backoff reset). */
+  function reconnectNow() {
+    if (!want || intentional || reloading) return;
+    if (api.connected && ws && ws.readyState === 1 && Date.now() - lastRx < STALE_MS) {
+      send(MSG.PING, { ts: Date.now() }); // looks fine: poke it anyway
+      return;
     }
-    const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** (attempts - 1)) * (0.8 + Math.random() * 0.4);
-    if (attempts === 1) toast(wasConnected ? 'Connection lost. Reconnecting…' : 'Connecting…', { kind: 'warn', key: 'net-conn' });
-    refreshPanel();
-    reconnectTimer = setTimeout(openSocket, delay);
+    if (!api.connected && ws && ws.readyState === 0 && attempts === 0) return; // the first try is under way
+    if (api.connected) beginOutage(); // a zombie socket (sleep, network switch): drop it
+    attempts = 0;
+    openSocket();
+  }
+  function startKeepalive() {
+    if (keepTimer || typeof setInterval !== 'function') return;
+    keepTimer = setInterval(() => {
+      if (!want) return;
+      if (api.connected && Date.now() - lastRx > STALE_MS) return reconnectNow();
+      if (api.connected) send(MSG.PING, { ts: Date.now() }); // secondary keep-alive, runs even when rAF does not
+    }, KEEPALIVE_MS);
+    keepTimer.unref?.();
+  }
+  function stopKeepalive() {
+    if (keepTimer) clearInterval(keepTimer);
+    keepTimer = 0;
+  }
+  function wireDocument() {
+    if (docWired || !hasDOM || typeof addEventListener !== 'function') return;
+    docWired = true;
+    addEventListener('online', reconnectNow);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') reconnectNow();
+    });
+    // closing the tab / navigating away is a real leave: no 90 s ghost (and no host stuck in its grace window)
+    addEventListener('pagehide', (e) => {
+      if (e.persisted || !want) return;
+      intentional = true;
+      want = null;
+      sayBye();
+    });
   }
 
   function start(room, name, server) {
@@ -384,11 +465,17 @@ export function create(ctx) {
     if (els.server) els.server.value = url;
     intentional = false;
     attempts = 0;
-    if (ws || api.connected) {
+    if (ws || api.connected || api.reconnecting) {
+      if (api.connected) sayBye();
       dropRoom(true);
       closeSocket();
     }
+    session = null; // a fresh create/join is a new player
+    api.reconnecting = false;
+    api.id = null;
     want = { server: url, room: room || null, name: api.name };
+    startKeepalive();
+    wireDocument();
     openSocket();
     return true;
   }
@@ -407,6 +494,7 @@ export function create(ctx) {
     const was = api.connected || !!want;
     intentional = true;
     want = null;
+    sayBye(); // removed at once, no grace window
     dropRoom(true);
     closeSocket();
     setOffline();
@@ -446,6 +534,21 @@ export function create(ctx) {
           removePlayer(m.id);
           ev.emit('net:playerLeft', { id: m.id });
         }
+        break;
+      }
+      case MSG.PRESENCE: {
+        const p = players.get(m.id);
+        if (!p) break;
+        if (typeof m.name === 'string' && m.name) addPlayer(m.id, m.name);
+        if (m.connected === false && !p.away) {
+          setAway(p, true);
+          ui?.system?.(`${p.name} lost the connection: waiting for them…`);
+        } else if (m.connected === true && p.away) {
+          setAway(p, false);
+          ui?.system?.(`${p.name} is back.`);
+          // same player, same id: let the host re-send the raft stock / vehicles they may have missed
+          ev.emit('net:playerJoined', { id: p.id, name: p.name, resumed: true });
+        } else if (m.connected === true) ev.emit('net:playerJoined', { id: p.id, name: p.name, resumed: true });
         break;
       }
       case MSG.HOST:
@@ -499,22 +602,55 @@ export function create(ctx) {
     if (mismatch && started && hasDOM && CONFIG.difficulty?.presets?.[hostDiff] && params.get('mpdiff') !== hostDiff) {
       return reloadForDifficulty(m);
     }
+    const back = api.reconnecting; // a reconnect after a drop (room, players and avatars were kept)
+    const sameId = back && api.id === m.id; // ...and the server re-attached us as the same player
+    const wasHost = api.isHost, oldHostId = api.hostId;
     api.id = m.id;
     api.room = m.room;
     api.isHost = !!m.isHost;
     api.hostId = m.hostId || (m.isHost ? m.id : null);
     api.connected = true;
+    api.reconnecting = false;
     api.mode = api.isHost ? 'host' : 'client';
     attempts = 0;
-    syncSkipGuard();
+    lastRx = Date.now();
+    if (typeof m.token === 'string' && m.token) session = { id: m.id, token: m.token, room: m.room };
     if (want) {
       want.room = m.room; // reconnects rejoin by code
       want.resume = true; // ...and bring the room back if the server restarted in between
     }
-    for (const p of m.players || []) addPlayer(p.id, p.name);
+    // reconcile the player list (someone may have left or joined while we were away)
+    const listed = new Set();
+    for (const q of m.players || []) {
+      if (!q || q.id === api.id) continue;
+      listed.add(q.id);
+      setAway(addPlayer(q.id, q.name), q.connected === false);
+    }
+    for (const id of [...players.keys()]) {
+      if (listed.has(id)) continue;
+      const name = players.get(id)?.name;
+      removePlayer(id);
+      if (back) ev.emit('net:playerLeft', { id, name });
+    }
+    if (wasHost !== api.isHost || oldHostId !== api.hostId) {
+      clock.err = 0;
+      restoreScale();
+    }
+    syncSkipGuard();
     refreshPanel();
     updateUrl(m.room);
-    ev.emit('net:connected', { id: api.id, room: api.room, isHost: api.isHost });
+    ev.emit('net:connected', { id: api.id, room: api.room, isHost: api.isHost, resumed: back });
+    if (back) {
+      toast('Reconnected.', { kind: 'good', key: 'net-conn' });
+      ui?.system?.(sameId ? 'Reconnected.' : `Reconnected to ${m.room}.`);
+      if (api.isHost) clockAcc = CLOCK_SEND_SEC; // re-announce our clock on the next frame
+      else if (typeof m.timeHours === 'number' && Number.isFinite(m.timeHours)) setClock(m.timeHours, false); // soft unless > 2 game min off
+      if (oldHostId !== api.hostId) {
+        if (api.isHost && !wasHost) toast('You are now the host: your clock and difficulty lead.', { kind: 'good' });
+        ev.emit('net:host', { id: api.hostId });
+      }
+      return;
+    }
     if (api.isHost) {
       toast(`Session ${m.room} created. Share the code so friends can join.`, { kind: 'good', duration: 7 });
       ui?.system?.(`Session ${m.room} created. You are the host.`);
@@ -536,12 +672,17 @@ export function create(ctx) {
     const msg = m.code === ERRORS.NO_ROOM ? 'No such session (or it ended).' : m.code === ERRORS.ROOM_FULL ? 'That session is full.' : m.message || 'Server error.';
     toast(msg, { kind: 'bad', duration: 6 });
     if (fatal) {
+      const wasIn = api.connected || api.reconnecting;
       intentional = true;
       want = null;
       closeSocket();
       dropRoom(true);
       setOffline();
       updateUrl(null);
+      if (wasIn) {
+        toast('Lost the connection to the session.', { kind: 'bad', key: 'net-conn' });
+        ev.emit('net:disconnected', {});
+      }
     }
   }
 
@@ -868,12 +1009,13 @@ export function create(ctx) {
       panelAcc = 0;
       refreshPanel();
     }
-    if (!api.connected) return;
+    if (!api.connected && !api.reconnecting) return;
     for (const p of players.values()) {
       p.avatar?.update(dt);
       // v5: a player sitting on a raft is drawn at their seat on OUR copy of it (theirs lags behind ours)
       if (p.avatar?.object && p.state?.aboard) ctx.vehicles?.seatFeet?.(p.id, p.avatar.object.position);
     }
+    if (!api.connected) return;
     pingAcc += dt;
     if (pingAcc >= PING_SEC) {
       pingAcc = 0;

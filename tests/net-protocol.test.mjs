@@ -123,8 +123,27 @@ test('validateEvent: only shared events, object payloads under 4 KB', () => {
 
 test('validateHello: sanitized fields', () => {
   const h = validateHello({ name: '<Zoé>', room: 'abcdef', seed: 42, difficulty: 'hard', timeHours: 12.5, v: 1 });
-  assert.deepEqual(h, { name: 'Zoé', room: 'ABCDEF', seed: 42, difficulty: 'hard', timeHours: 12.5, resume: false, v: 1 });
+  assert.deepEqual(h, { name: 'Zoé', room: 'ABCDEF', seed: 42, difficulty: 'hard', timeHours: 12.5, resume: false, resumeId: null, resumeToken: null, v: 1 });
   assert.equal(validateHello({ name: 'a', resume: true }).resume, true, 'resume flag passes through');
+});
+
+test('V6 reliability: resume credentials, bye/presence, heartbeat limits', () => {
+  const tok = 'Ab3_-xYz0123456789abcd';
+  const r = validateHello({ room: 'ABCDEF', resume: true, resumeId: 'ab12cd34', resumeToken: tok });
+  assert.equal(r.resumeId, 'ab12cd34');
+  assert.equal(r.resumeToken, tok);
+  for (const bad of [{ resumeId: 'AB<>' }, { resumeId: 'x'.repeat(17) }, { resumeId: 42 }, { resumeToken: 'short' }, { resumeToken: 'x'.repeat(65) }, { resumeToken: 'has space in it 123456' }]) {
+    const v = validateHello(bad);
+    assert.equal(v.resumeId, null, JSON.stringify(bad));
+    assert.equal(v.resumeToken, null, JSON.stringify(bad));
+  }
+  assert.equal(validateHello({ resumeId: makeId() }).resumeId?.length, 8, 'server ids are valid resume ids');
+  assert.equal(MSG.BYE, 'bye');
+  assert.equal(MSG.PRESENCE, 'presence');
+  assert.deepEqual(decode(encode(MSG.PRESENCE, { id: 'ab12cd34', connected: false })), { t: 'presence', id: 'ab12cd34', connected: false });
+  assert.equal(LIMITS.idleMs, undefined, 'no app-message idle drop any more');
+  assert.ok(LIMITS.heartbeatMs > 0 && LIMITS.deadMs >= LIMITS.heartbeatMs * 3, 'a few missed pings before a drop');
+  assert.ok(LIMITS.resumeGraceMs >= 60_000);
   const e = validateHello({});
   assert.equal(e.name, 'Castaway');
   assert.equal(e.room, null);

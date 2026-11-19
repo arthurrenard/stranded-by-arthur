@@ -137,8 +137,8 @@ a VPS behind Caddy or nginx, or a Raspberry Pi with a tunnel. Pages served over 
 - **No persistence.** Rooms live only in the server's memory. A room disappears when its last player leaves, and every
   room disappears when the server restarts. Each player's own game state is unaffected (each tab keeps its world).
 - **Host hand-off.** When the host leaves, the next player becomes host and their clock leads from then on.
-- **Disconnects.** Sockets silent for 30 s are dropped. The client retries with backoff (8 tries, up to 30 s apart) and
-  re-joins the same code.
+- **Disconnects.** See § 6c Reliability: a dropped player keeps their slot (same id, host role) for 90 s and the client
+  retries forever (backoff 0.5 → 8 s) until it is back in.
 - **Message caps.** 16 KB per message, 4 KB per event payload. 30 state updates and 30 events per second are accepted
   per player. Positions beyond ±5000 m are rejected.
 
@@ -147,6 +147,37 @@ The relay keeps rooms in memory, so a server restart (a deploy, Fly maintenance,
 5 minutes until a card is added at https://fly.io/trial**) drops everyone. Clients reconnect automatically and send `resume`, so
 the server re-creates the room under the same code: you see "Connection lost. Reconnecting…" for a few seconds, then play on.
 With a card on file the 5-minute cutoff goes away (invoices under $5 are waived, and this server costs about $2/month).
+
+## 6c. Reliability (V6)
+A real 2-player session (Belgium ↔ California) lost a player ~11 min in although the server never restarted. Causes: the
+server dropped sockets that sent no *application* message for 30 s (a background tab stops rAF, so no state/pings),
+background tabs throttle the client's reconnect timers, and every reconnect came back as a new player (new id, new avatar,
+host role lost). Now:
+
+- **Heartbeat (server).** Every `HEARTBEAT_MS` (15 s) the server sends a WebSocket *ping frame*. Browsers answer those
+  themselves, even in a hidden tab. A socket is dropped only if it neither answered a pong nor sent any message for `DEAD_MS`
+  (60 s). There is no app-message idle rule any more. The app-level `ping{ts}` every 5 s stays (RTT for the player list).
+- **Grace-period resume.** When a socket closes without a `bye`, the player stays in the room as *disconnected* for
+  `RESUME_GRACE_MS` (90 s): no `playerLeft`, no host migration; the others get `presence{id, connected:false}` and show the
+  avatar's tag as "Name (away)". The welcome carries a random `token` (only to that player). On reconnect the client sends
+  `hello{room, resume:true, resumeId, resumeToken}`; inside the window the server re-attaches the same player (same id, host
+  role kept, `welcome{resumed:true}`, `presence{connected:true}` to the others: the host then re-sends `raft:sync` and
+  vehicles re-announce). A resume also works over a half-open socket the server still thinks is alive (it is retired). A
+  wrong token just joins as a new player. After the window: the normal `playerLeft` + host migration (to a connected player).
+  A new joiner never waits for a disconnected host.
+- **Restart resume** (unchanged): `resume:true` for an unknown room re-creates it under the same code (keeping the old id).
+- **Client.** An unexpected close keeps the room, id, host role, players and avatars (`ctx.net.reconnecting`); no
+  `net:disconnected` is emitted for a blip. It retries forever (0.5, 1, 2, 4, 8, 8… s, ±20 % jitter), and at once on
+  `online` and when the tab becomes visible. A 10 s `setInterval` (not rAF) sends an app ping and treats 20 s without any
+  inbound message as a dead socket. Toasts: "Connection lost. Reconnecting…" once, "Reconnected." once; "Lost the
+  connection" only on a fatal error (e.g. the room filled up meanwhile). After a resume the host re-sends `time:set`; a
+  client's clock is corrected softly unless it is > 2 game minutes off. `leave()` (and closing the tab, `pagehide`)
+  sends `bye{}`, which removes the player at once.
+- **Tests:** `cd server && npm test` runs `reliability.test.mjs` (raw sockets) and `client.test.mjs` (the real net.js over `ws`) with short `heartbeatMs / deadMs / graceMs` (also
+  settable by the `HEARTBEAT_MS`, `DEAD_MS`, `RESUME_GRACE_MS` env).
+- **Deploy note:** rooms live in one process's memory, so the relay must run as **exactly one** Fly machine (never scale
+  it out). `auto_stop_machines` only stops a machine with no connections; set `min_machines_running = 1` (or
+  `auto_stop_machines = "off"`) to also avoid the cold start for the first player.
 
 ## 7. Cost
 

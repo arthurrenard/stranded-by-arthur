@@ -101,4 +101,6 @@ card to Fly (5-min trial cutoff should be gone: verifying with a 6.7-min connect
   (rAF paused), throttled timers delayed the reconnect, and reconnects came back as new players (the host role was lost).
   Fix in progress (V6-N): ws-level heartbeat, a 90 s grace-period resume with the same id + host, immediate reconnect on visibility/online.
 - AZERTY labels/bindings + French (no Jour/Day flicker under auto-translate, French compass, EN/FR toggle) in progress (V6-L).
-- Run wf_6f8657ab-0db (2 agents). After it: two-tab test incl. a forced drop, server redeploy, push.
+- [x] DONE: server redeployed (ws heartbeat, 90 s grace resume, min_machines_running=1). Two-tab test over Fly with forced socket
+  cuts: the client and the host each resumed in <1 s with the same id; the host kept the host role; no leave/migration seen by the other.
+  French (?lang=fr / auto): 'JOUR 1', compass S SO O NO N NE E SE, translate=no. AZERTY labels Z/Q/S/D, A=drop, M=map; ZQSD in the lists.

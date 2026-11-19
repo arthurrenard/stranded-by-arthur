@@ -10,6 +10,13 @@
 //        client  chat{text}            → server relays chat{id, name, text} to everyone else (sanitized, 200 chars)
 //        both    ping{ts} ↔ pong{ts}   (the server also uses its own pings to measure each player's RTT)
 //        server  playerJoined{id,name} / playerLeft{id} / host{id} / error{code, message}
+// V6 reliability (docs/MULTIPLAYER.md § Reliability):
+//        server  welcome also carries {token, resumed}; players:[{id,name,connected}]
+//        client  hello{..., resume:true, resumeId, resumeToken}  → re-attach to the same player (same id, host kept)
+//                within the grace window after an unexpected disconnect
+//        server  presence{id, connected}  (a player's socket dropped / came back; no playerLeft until the grace ends)
+//        client  bye{}  (an intentional leave: removed at once, no grace)
+//        The server also pings every socket at the WebSocket protocol level (browsers answer even in hidden tabs).
 
 export const PROTOCOL_VERSION = 1;
 
@@ -26,6 +33,8 @@ export const MSG = Object.freeze({
   LEFT: 'playerLeft',
   HOST: 'host',
   ERROR: 'error',
+  PRESENCE: 'presence',
+  BYE: 'bye',
 });
 
 export const LIMITS = Object.freeze({
@@ -37,8 +46,11 @@ export const LIMITS = Object.freeze({
   stateHz: 30, // state updates accepted per second (the client sends CONFIG.net.tickHz = 15)
   eventsPerSec: 30,
   chatPerSec: 2,
-  idleMs: 30_000, // a socket silent for this long is dropped
-  pingMs: 5_000, // server → client keep-alive pings
+  pingMs: 5_000, // server → client app-level pings (RTT + an inbound stream the client watches for dead sockets)
+  heartbeatMs: 15_000, // server → socket WebSocket ping frames (answered by the browser itself, even in a background tab)
+  deadMs: 60_000, // a socket with no pong and no message for this long is dropped
+  resumeGraceMs: 90_000, // a player whose socket dropped stays in the room (as disconnected) this long, waiting to resume
+  tokenChars: 64, // max resume token length
   snapshotHz: 20,
   defaultMaxPlayers: 8,
   worldHalf: 5000, // positions beyond ±this are rejected
@@ -231,7 +243,7 @@ function checkPayload(name, p) {
   }
 }
 
-/** Normalize a `hello`. Returns { name, room|null, seed|null, difficulty|null, timeHours|null, v } or null. */
+/** Normalize a `hello`. Returns { name, room|null, seed|null, difficulty|null, timeHours|null, resume, resumeId|null, resumeToken|null, v } or null. */
 export function validateHello(o) {
   if (!o || typeof o !== 'object') return null;
   const v = typeof o.v === 'number' ? o.v : PROTOCOL_VERSION;
@@ -243,6 +255,9 @@ export function validateHello(o) {
     timeHours: num(o.timeHours, 0, 1e6) ? o.timeHours : null,
     // a reconnect to a room this client was already in: if the server restarted and lost it, re-create it under the same code
     resume: o.resume === true,
+    // V6: re-attach to that player (same id, host role kept) while the server still holds it in its grace window
+    resumeId: typeof o.resumeId === 'string' && /^[a-z0-9]{1,16}$/.test(o.resumeId) ? o.resumeId : null,
+    resumeToken: typeof o.resumeToken === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(o.resumeToken) ? o.resumeToken : null,
     v,
   };
 }

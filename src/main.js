@@ -4,7 +4,8 @@ import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { createRng } from './core/rng.js';
 import { createEvents } from './core/events.js';
-import { createInput } from './core/input.js';
+import { createInput, keyLabel, actionLabel } from './core/input.js';
+import { initI18n, setLang, getLang, onLangChange, t as tr } from './core/i18n.js';
 import { createClock } from './core/clock.js';
 import { createColliders } from './core/spatial.js';
 import { createInteract } from './core/interact.js';
@@ -358,7 +359,47 @@ function wireTitle() {
   });
 }
 
+// V6 (V6-L): key labels on the title + pause controls lists follow the keyboard layout; EN / FR toggle.
+function controlsLabel(what) {
+  const kl = keyLabel;
+  switch (what) {
+    case 'move':
+      // before the layout is known (no getLayoutMap: Firefox / Safari) keep both spellings
+      return ctx.input.layoutKnown ? kl('KeyW') + kl('KeyA') + kl('KeyS') + kl('KeyD') : 'WASD / ZQSD';
+    case 'interact':
+      return `${kl('KeyE')} / ${tr('key.click')}`;
+    case 'useItem':
+      return `${kl('KeyF')} / ${tr('key.rclick')}`;
+    case 'craft':
+      return `Tab / ${actionLabel('craft')}`;
+    default:
+      return actionLabel(what);
+  }
+}
+function refreshKeyLabels() {
+  for (const b of document.querySelectorAll('[data-keys]')) b.textContent = controlsLabel(b.dataset.keys);
+}
+function wireI18n() {
+  initI18n();
+  refreshKeyLabels();
+  events.on('input:layout', refreshKeyLabels);
+  const btns = document.querySelectorAll('.lang-toggle [data-lang]');
+  const sync = () => {
+    for (const b of btns) b.classList.toggle('on', b.dataset.lang === getLang());
+    const lab = $('opt-lang-label');
+    if (lab) lab.textContent = tr('opt.lang');
+  };
+  for (const b of btns) b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setLang(b.dataset.lang);
+  });
+  onLangChange(sync);
+  onLangChange(refreshKeyLabels);
+  sync();
+}
+
 function wireOverlays() {
+  wireI18n();
   wireTitle();
   // Only REQUEST the lock here: the overlay stays up until pointerlockchange confirms it ('input:lock').
   // (Hiding it first made it pop up a second time whenever the browser refused the lock.)
