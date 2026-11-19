@@ -936,7 +936,10 @@ export function create(ctx) {
     }
     // visuals: raise/lower the held torch, bob with the walk, flicker the light
     const target = torch.lit ? 1 : 0;
-    torch.show += (target - torch.show) * Math.min(1, dt * 7);
+    // cinematics (summit survey, rides, cutscenes) fly the camera away: the torch is camera-held, so drop it out of frame
+    // instantly (it keeps burning) and raise it again when the shot hands the camera back
+    if (ctx.flags.cinematic) torch.show = 0;
+    else torch.show += (target - torch.show) * Math.min(1, dt * 7);
     if (torch.show < 0.01 && !torch.lit) torch.show = 0;
     const visible = torch.show > 0.01;
     torchObj.visible = visible;

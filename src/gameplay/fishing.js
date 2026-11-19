@@ -334,6 +334,7 @@ export function create(ctx) {
     logic.tick(dt, input);
     handleEvents();
     if (S.phase === 'idle') return;
+    if (rod) rod.visible = shown && !ctx.flags?.cinematic; // the rod is camera-held: keep it out of cinematic shots
 
     // float + line + rod bend
     const T = clock;
