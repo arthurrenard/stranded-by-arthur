@@ -95,3 +95,10 @@ card to Fly (5-min trial cutoff should be gone: verifying with a 6.7-min connect
 - [x] SPEC §13 contract + ownership
 - [x] V5 done: slots/drag/drop/Q + co-op (drops, stockpile, 2-seat raft). Server redeployed. Two-tab test over Fly passed (drop seen +
   picked, stock synced, passenger rides the driver's raft). Card on Fly confirmed (400 s connection held).
+
+## v6 (2026-11-18): user's report after a Belgium ↔ California session
+- Disconnect ~11 min in: NOT a server restart (Fly card works). The server's 30 s app-message idle drop killed a backgrounded tab
+  (rAF paused), throttled timers delayed the reconnect, and reconnects came back as new players (the host role was lost).
+  Fix in progress (V6-N): ws-level heartbeat, a 90 s grace-period resume with the same id + host, immediate reconnect on visibility/online.
+- AZERTY labels/bindings + French (no Jour/Day flicker under auto-translate, French compass, EN/FR toggle) in progress (V6-L).
+- Run wf_6f8657ab-0db (2 agents). After it: two-tab test incl. a forced drop, server redeploy, push.
